@@ -23,4 +23,6 @@ Follow [setup and deployment](docs/setup.md) for permissions, API keys, a system
 
 Browser regression: install `requirements-dev.txt`, run `python -m playwright install --with-deps chromium webkit`, then `python -m tests.browser_smoke`. Build Python packages with `python -m build` or standalone executables with `python scripts/build_distribution.py`. Pushes/PRs run regression CI across Windows/macOS/Linux and desktop/mobile browsers. Tags `v*` test and publish distribution packages with checksums.
 
+Optional live import check: `python -m scripts.live_import_smoke` retrieves LCSC C25804 and reviews it with DeepSeek. Enter your key at the hidden prompt; the script does not save it. This makes a billable API request. Use `--code` or `--model` to test another part or model.
+
 iOS support is a PWA; desktop executables open a local browser interface. Credentials are plaintext at rest with private filesystem permissions. Supplier pages may block automation; use available API credentials. LLM reviews check consistency and require datasheet confirmation. v0.1 targets snapshots below 1 MB and trusted repository collaborators.
