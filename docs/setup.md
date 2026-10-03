@@ -42,7 +42,7 @@ Session cookies are HttpOnly and SameSite, valid for 30 days. A separate HttpOnl
 
 | Supplier | Connection | Lookup |
 |---|---|---|
-| DigiKey | Client ID/secret from its [developer portal](https://developer.digikey.com/products/product-information-v4) | OAuth client credentials, v4 ProductDetails, exact MPN or packaging variation code. Account API access required. |
+| DigiKey | Client ID, secret, and account ID from its [developer portal](https://developer.digikey.com/products/product-information-v4) | OAuth client credentials, v4 ProductDetails, exact MPN or packaging variation code. The account ID is required for two-legged OAuth. Account API access required. |
 | Mouser | [Search API](https://www.mouser.com/en/api-search/) key | Exact MPN or Mouser code; image and datasheet links. |
 | Arrow | Login and [API key](https://developers.arrow.com/api/index.php/site/page?view=Itemservice) | v4 search, MPN/item/source identity; imagery from the linked product page. |
 | LCSC | Public product page | `C` followed by digits; structured metadata and specifications. |

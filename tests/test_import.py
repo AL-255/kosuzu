@@ -26,9 +26,16 @@ class ImportTests(unittest.TestCase):
 
     def test_digikey_variation_code_oauth_and_image(self):
         transport=ResponseTransport({"Product":{"Manufacturer":{"Name":"Example"},"ManufacturerProductNumber":"R-10K","Description":{"ProductDescription":"Resistor"},"ProductUrl":"https://www.digikey.com/en/products/detail/test","PhotoUrl":"https://www.digikey.com/img.jpg","ProductVariations":[{"DigiKeyProductNumber":"123-TEST-ND"}],"Parameters":[{"ParameterText":"Resistance","ValueText":"10 kohm"}]}})
-        result,_=lookup("digikey","123-TEST-ND",{"client_id":"id","client_secret":"secret"},transport)
+        result,_=lookup("digikey","123-TEST-ND",{"client_id":"id","client_secret":"secret","account_id":"123"},transport)
         self.assertEqual(result["mpn"],"R-10K"); self.assertTrue(result["image_url"])
         self.assertEqual(transport.calls[0][1]["headers"]["Authorization"],"Bearer oauth-token")
+        self.assertEqual(transport.calls[0][1]["headers"]["X-DIGIKEY-Account-Id"],"123")
+
+    def test_digikey_requires_account_id_for_two_legged_oauth(self):
+        transport=ResponseTransport({})
+        with self.assertRaisesRegex(ValidationError,"account ID"):
+            lookup("digikey","123-TEST-ND",{"client_id":"id","client_secret":"secret"},transport)
+        self.assertEqual(transport.calls,[])
 
     def test_arrow_exact_source_code_and_page_image(self):
         transport=ResponseTransport({"itemserviceresult":{"data":[{"PartList":[{"partNum":"R-10K","itemId":123,"manufacturer":{"mfrName":"Example"},"desc":"Resistor","resources":[{"type":"cloud_part_detail","uri":"https://www.arrow.com/en/products/r-10k/example"}],"InvOrg":{"webSites":[{"sources":[{"sourceParts":[{"sourcePartId":"AR-001"}]}]}]}}]}]}})

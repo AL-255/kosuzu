@@ -160,7 +160,7 @@ class WebSupplier:
 class DigiKey(WebSupplier):
     key, name = "digikey", "DigiKey"
     domains = {"www.digikey.com", "digikey.com"}
-    credential_fields = ["client_id", "client_secret"]
+    credential_fields = ["client_id", "client_secret", "account_id"]
 
     def search_url(self, code):
         return "https://www.digikey.com/en/products?" + urlencode({"keywords": code})
@@ -168,6 +168,8 @@ class DigiKey(WebSupplier):
     def lookup(self, code, credentials, transport, product_url=""):
         if not credentials.get("client_id") or not credentials.get("client_secret"):
             return super().lookup(code, credentials, transport, product_url)
+        if not credentials.get("account_id"):
+            raise ValidationError("DigiKey client-credentials OAuth requires your account ID. Save it with the client ID and secret in Settings")
         # DigiKey's OAuth endpoint requires form encoding, unlike its product API.
         try:
             req = Request("https://api.digikey.com/v1/oauth2/token", data=urlencode({"client_id": credentials["client_id"], "client_secret": credentials["client_secret"], "grant_type": "client_credentials"}).encode(), headers={"Content-Type": "application/x-www-form-urlencoded"})
@@ -176,7 +178,7 @@ class DigiKey(WebSupplier):
             else:
                 with secure_opener(SupplierRedirect({"api.digikey.com"})).open(req, timeout=25) as response:
                     token = json.loads(response.read(100000))
-            result = transport.request("GET", f"https://api.digikey.com/products/v4/search/{quote(code, safe='')}/productdetails", headers={"Authorization": "Bearer " + token["access_token"], "X-DIGIKEY-Client-Id": credentials["client_id"], "X-DIGIKEY-Locale-Site": "US", "X-DIGIKEY-Locale-Language": "en", "X-DIGIKEY-Locale-Currency": "USD"})
+            result = transport.request("GET", f"https://api.digikey.com/products/v4/search/{quote(code, safe='')}/productdetails", headers={"Authorization": "Bearer " + token["access_token"], "X-DIGIKEY-Client-Id": credentials["client_id"], "X-DIGIKEY-Account-Id": credentials["account_id"], "X-DIGIKEY-Locale-Site": "US", "X-DIGIKEY-Locale-Language": "en", "X-DIGIKEY-Locale-Currency": "USD"})
             p = result["Product"]
             codes = [p.get("ManufacturerProductNumber", "")] + [v.get("DigiKeyProductNumber", "") for v in p.get("ProductVariations", [])]
             if code.casefold() not in [c.casefold() for c in codes]:
