@@ -1,0 +1,6 @@
+include LICENSE README.md requirements-dev.txt
+recursive-include kosuzu/web *
+recursive-include docs *.md
+recursive-include deploy *
+recursive-include scripts *.py
+recursive-include tests *.py

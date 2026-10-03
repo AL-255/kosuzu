@@ -1,0 +1,23 @@
+[Unit]
+Description=Kosuzu collaborative component inventory
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kosuzu
+Group=kosuzu
+StateDirectory=kosuzu
+StateDirectoryMode=0700
+ExecStart=/opt/kosuzu/kosuzu server --state-dir /var/lib/kosuzu --host 127.0.0.1 --port 8765 --public-url https://inventory.example.com --no-browser --interval 60
+Restart=on-failure
+RestartSec=10
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/kosuzu
+
+[Install]
+WantedBy=multi-user.target

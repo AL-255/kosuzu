@@ -5,7 +5,7 @@ from html.parser import HTMLParser
 from urllib.parse import quote, urlencode, urljoin, urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 from urllib.error import HTTPError, URLError
-from .http import RemoteError, Transport
+from .http import RemoteError, Transport, secure_opener
 from .model import ValidationError, safe_url, text
 
 REGISTRY = {}
@@ -41,7 +41,7 @@ def check_domain(url, domains):
 def public_page(url, domains):
     check_domain(url, domains)
     try:
-        with build_opener(SupplierRedirect(domains)).open(Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; Kosuzu/0.1)"}), timeout=25) as response:
+        with secure_opener(SupplierRedirect(domains)).open(Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; Kosuzu/0.1)"}), timeout=25) as response:
             raw = response.read(4_000_001)
             if len(raw) > 4_000_000:
                 raise RemoteError("Product page exceeds 4 MB")
@@ -169,13 +169,12 @@ class DigiKey(WebSupplier):
         if not credentials.get("client_id") or not credentials.get("client_secret"):
             return super().lookup(code, credentials, transport, product_url)
         # DigiKey's OAuth endpoint requires form encoding, unlike its product API.
-        from urllib.request import urlopen
         try:
             req = Request("https://api.digikey.com/v1/oauth2/token", data=urlencode({"client_id": credentials["client_id"], "client_secret": credentials["client_secret"], "grant_type": "client_credentials"}).encode(), headers={"Content-Type": "application/x-www-form-urlencoded"})
             if hasattr(transport, "oauth"):
                 token = transport.oauth(req)
             else:
-                with build_opener(SupplierRedirect({"api.digikey.com"})).open(req, timeout=25) as response:
+                with secure_opener(SupplierRedirect({"api.digikey.com"})).open(req, timeout=25) as response:
                     token = json.loads(response.read(100000))
             result = transport.request("GET", f"https://api.digikey.com/products/v4/search/{quote(code, safe='')}/productdetails", headers={"Authorization": "Bearer " + token["access_token"], "X-DIGIKEY-Client-Id": credentials["client_id"], "X-DIGIKEY-Locale-Site": "US", "X-DIGIKEY-Locale-Language": "en", "X-DIGIKEY-Locale-Currency": "USD"})
             p = result["Product"]

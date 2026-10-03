@@ -176,6 +176,10 @@ document.querySelectorAll('[data-view]').forEach(button => button.addEventListen
 $('new-component').addEventListener('click', () => { clearMessages(); showView('import'); });
 $('empty-settings').addEventListener('click', () => showView(state.settings?.client_token_saved ? 'import' : 'settings'));
 $('logout').addEventListener('click', async () => { try { await api('logout',{}); signedOut(); } catch(error) { showError(error); } });
+const mobileLogout = document.createElement('button');
+mobileLogout.className = 'text-button mobile-logout'; mobileLogout.textContent = 'Sign out';
+mobileLogout.addEventListener('click', () => $('logout').click());
+document.querySelector('.topbar').append(mobileLogout);
 window.addEventListener('hashchange', () => { if (state.settings) showView(location.hash.slice(1)); });
 $('search').addEventListener('input', renderInventory); $('category-filter').addEventListener('change', renderInventory); $('low-filter').addEventListener('change',renderInventory);
 $('refresh').addEventListener('click', async event => { clearMessages(); try { await busy(event.currentTarget, loadInventory, 'Refreshing…'); } catch (error) { showError(error); } });
