@@ -103,7 +103,14 @@ class GitHub:
         existing = self.pages("pulls?" + urlencode({"state": "all", "head": self.repo.split("/")[0] + ":" + branch, "base": self.branch}))
         if existing:
             pr = existing[0]
-            return {"status": "applied" if pr.get("merged_at") else "rejected" if pr["state"] == "closed" else "pending", "event_id": ident, "number": pr["number"], "url": pr["html_url"]}
+            result = {"status": "applied" if pr.get("merged_at") else "rejected" if pr["state"] == "closed" else "pending", "event_id": ident, "number": pr["number"], "url": pr["html_url"]}
+            statuses = self.call("GET", f"commits/{pr['head']['sha']}/status").get("statuses", [])
+            report = next((s for s in statuses if s["context"] == "kosuzu/inventory"), None)
+            if report and report["state"] == "failure" and result["status"] != "applied":
+                result["error"] = report["description"]
+                if result["status"] == "pending":
+                    result["status"] = "blocked"
+            return result
         pr = self.call("POST", "pulls", {"title": f"Kosuzu: {event['kind']} {event['delta']:+d}", "head": branch, "base": self.branch, "body": f"Transaction `{ident}`. The Kosuzu server validates this proposal against current stock before merging."})
         return {"status": "pending", "event_id": ident, "number": pr["number"], "url": pr["html_url"]}
 
@@ -140,3 +147,15 @@ class GitHub:
 
     def reject(self, number):
         self.call("PATCH", f"pulls/{number}", {"state": "closed"})
+
+    def report(self, number, error=""):
+        """Publish machine-readable warnings for independent desktop clients."""
+        pr = self.call("GET", f"pulls/{number}")
+        sha = pr["head"]["sha"]
+        description = error[:140] if error else "Inventory transaction applied"
+        state = "failure" if error else "success"
+        statuses = self.call("GET", f"commits/{sha}/status").get("statuses", [])
+        prior = next((s for s in statuses if s["context"] == "kosuzu/inventory"), None)
+        if prior and prior["description"] == description and prior["state"] == state:
+            return
+        self.call("POST", f"statuses/{sha}", {"state": state, "context": "kosuzu/inventory", "description": description})

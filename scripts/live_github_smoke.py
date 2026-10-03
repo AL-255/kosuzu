@@ -38,6 +38,8 @@ def main():
         except ValidationError as exc: assert "available 3" in str(exc)
         else: raise AssertionError("Overspending removal unexpectedly merged")
         assert gh.inventory()["components"][p["id"]]["quantity"]==3
+        gh.report(removals[1]["number"], "Insufficient stock: available 3, requested 7. Submit a smaller removal")
+        assert gh.submit(events[2])["status"]=="blocked"
         assert gh.submit(events[1])["status"]=="applied"
         gh.reject(removals[1]["number"])
         print(f"PASS real GitHub: exact proposal, auto-recognized merge, concurrent removal conflict, idempotent retry. PRs: {numbers}")

@@ -126,7 +126,7 @@ function openStock(ident) {
 }
 
 function transactionNotice(result) {
-  const messages = {applied:'Your request is applied to the inventory.', pending:'Request submitted to GitHub. Your server will validate and apply it.', queued:'Request saved locally. It will retry when GitHub is available.', rejected:'This request was rejected. Check the server error queue and submit a corrected request.'};
+  const messages = {applied:'Your request is applied to the inventory.', pending:'Request submitted to GitHub. Your server will validate and apply it.', queued:'Request saved locally. It will retry when GitHub is available.', blocked:'Your request needs a correction. Read its error below and ask the server administrator to reject it before submitting a replacement.', rejected:'This request was rejected. Check the server error queue and submit a corrected request.'};
   notice(messages[result.status] || 'Request saved.');
   showView('requests');
 }

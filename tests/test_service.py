@@ -84,12 +84,51 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(self.store.errors("test/library")[0]["status"],"resolved")
         self.assertEqual(self.api.prs[2]["state"],"closed")
 
+    def test_independent_clients_receive_actionable_failure_status(self):
+        p=self.seed(); self.service.submit(self.client,new_event("adjust",p["id"],-60)); self.service.sync()
+        self.service.flush(self.client)
+        result=self.store.outbox(self.client["id"])[0]["result"]
+        self.assertEqual(result["status"],"blocked")
+        self.assertIn("available 50",result["error"])
+        self.assertIn("smaller removal",result["error"])
+
+    def test_applied_requests_keep_their_github_links(self):
+        p=self.seed(); self.service.submit(self.client,new_event("adjust",p["id"],1)); self.service.sync(); self.service.flush(self.client)
+        result=self.store.outbox(self.client["id"])[0]["result"]
+        self.assertEqual(result["status"],"applied")
+        self.assertEqual(result["number"],2)
+        self.assertTrue(result["url"].endswith("/pull/2"))
+
+    def test_status_permission_failure_is_queued_without_repeating_delta(self):
+        p=self.seed(); self.service.submit(self.client,new_event("adjust",p["id"],1))
+        original=self.api.request
+        from kosuzu.http import RemoteError
+        def no_status(method,url,*args,**kwargs):
+            if method=="POST" and "/statuses/" in url: raise RemoteError("Access denied",403)
+            return original(method,url,*args,**kwargs)
+        self.api.request=no_status; self.service.sync()
+        self.assertEqual(self.service.github().inventory()["components"][p["id"]]["quantity"],51)
+        self.assertIn("Commit statuses: write",next(e for e in self.store.errors("test/library") if e["status"]=="open")["message"])
+        self.api.request=original; self.service.sync()
+        self.assertTrue(all(e["status"]=="resolved" for e in self.store.errors("test/library")))
+        self.assertEqual(self.service.github().inventory()["components"][p["id"]]["quantity"],51)
+
     def test_network_outage_keeps_outbox_and_safe_retry(self):
         p=self.seed(); event=new_event("adjust",p["id"],5); self.api.offline=True
         result=self.service.submit(self.client,event); self.assertEqual(result["status"],"queued")
         self.api.offline=False; self.service.flush(self.client); self.service.sync(); self.service.flush(self.client)
         self.assertEqual(self.store.outbox(self.client["id"])[0]["result"]["status"],"applied")
         self.assertEqual(self.service.github().inventory()["components"][p["id"]]["quantity"],55)
+
+    def test_unexpected_upstream_error_preserves_outbox_for_later_retry(self):
+        p=self.seed(); e=new_event("adjust",p["id"],2)
+        self.api.offline=True; self.service.submit(self.client,e); self.api.offline=False
+        with patch("kosuzu.github.GitHub.submit",side_effect=RuntimeError("bad response")):
+            self.service.flush(self.client)
+        result=self.store.outbox(self.client["id"])[0]["result"]
+        self.assertEqual(result["status"],"queued"); self.assertIn("retained for retry",result["error"])
+        self.service.flush(self.client); self.service.sync(); self.service.flush(self.client)
+        self.assertEqual(self.service.github().inventory()["components"][p["id"]]["quantity"],52)
 
     def test_outbox_stays_pinned_to_original_repo(self):
         p=self.seed(); e=new_event("adjust",p["id"],1); self.api.offline=True; self.service.submit(self.client,e); self.api.offline=False

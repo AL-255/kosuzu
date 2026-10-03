@@ -98,7 +98,11 @@ class Handler(BaseHTTPRequestHandler):
                 if path == "/api/queue":
                     if service.mode != "server":
                         return self.response(403, {"error": "Error queue is available in server mode"})
-                    return self.response(200, {"errors": service.store.errors(service.store.setting("repo", "")), "last_sync": service.store.setting("last_sync")})
+                    errors = service.store.errors(service.store.setting("repo", ""))
+                    for item in errors:
+                        if item["number"] and item["number"] < 0:
+                            item["number"] = None
+                    return self.response(200, {"errors": errors, "last_sync": service.store.setting("last_sync")})
                 return self.response(404, {"error": "Unknown API endpoint"})
             names = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/style.css": "style.css", "/manifest.webmanifest": "manifest.webmanifest", "/sw.js": "sw.js", "/icon.svg": "icon.svg", "/icon-192.png": "icon-192.png", "/icon-512.png": "icon-512.png"}
             if path not in names or not (WEB / names[path]).is_file():
@@ -184,5 +188,5 @@ def periodic(service, stopped, interval):
             try:
                 if service.store.profile(profile["id"]).get("github_token") and service.store.setting("repo"):
                     service.flush({"id": profile["id"], "role": "client"})
-            except (ValidationError, RemoteError):
-                pass
+            except Exception as exc:
+                service.store.error(service.store.setting("repo", ""), None, str(exc) if isinstance(exc, (ValidationError, RemoteError)) else "Unexpected client retry failure; check connections and retry")

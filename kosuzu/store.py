@@ -85,7 +85,11 @@ class Store:
         return rows
 
     def result(self, ident, result):
-        self.execute("UPDATE outbox SET result=?,updated=? WHERE id=?", (json.dumps(result), time.time(), ident))
+        with self.lock:
+            rows = self.execute("SELECT result FROM outbox WHERE id=?", (ident,))
+            previous = json.loads(rows[0]["result"]) if rows else {}
+            previous.pop("error", None)
+            self.execute("UPDATE outbox SET result=?,updated=? WHERE id=?", (json.dumps({**previous, **result}), time.time(), ident))
 
     def draft(self, profile, part):
         ident = secrets.token_hex(16)

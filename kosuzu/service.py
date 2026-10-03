@@ -164,6 +164,8 @@ class Service:
                 result = gh.submit(row["event"])
             except (RemoteError, ValidationError) as exc:
                 result = {**row["result"], "error": str(exc)}
+            except Exception:
+                result = {**row["result"], "error": "Unexpected upstream data; request retained for retry. Check connections or report the problem"}
             self.store.result(row["id"], result)
         return self.store.outbox(user["id"])
 
@@ -195,12 +197,16 @@ class Service:
                 try:
                     results.append({"number": pr["number"], **gh.merge(pr["number"])})
                     self.store.resolve(repo, pr["number"])
+                    self.report(gh, pr["number"])
                 except (ValidationError, RemoteError) as exc:
                     self.store.error(repo, pr["number"], str(exc))
+                    self.report(gh, pr["number"], str(exc))
                     results.append({"number": pr["number"], "error": str(exc)})
             # Closed or manually fixed proposals clear queue entries on the next pass.
             for item in self.store.errors(repo):
-                if item["status"] == "open" and item["number"]:
+                if item["status"] == "open" and item["number"] and item["number"] < 0:
+                    self.report(gh, -item["number"], self.store.setting(f"report:{repo}#{-item['number']}", ""))
+                elif item["status"] == "open" and item["number"]:
                     pr = gh.call("GET", f"pulls/{item['number']}")
                     if pr["state"] == "closed":
                         self.store.resolve(repo, item["number"])
@@ -212,6 +218,14 @@ class Service:
             raise
         finally:
             self.sync_lock.release()
+
+    def report(self, gh, number, error=""):
+        self.store.set_setting(f"report:{gh.repo}#{number}", error)
+        try:
+            gh.report(number, error)
+            self.store.resolve(gh.repo, -number)
+        except RemoteError as exc:
+            self.store.error(gh.repo, -number, "Could not publish client status. Grant the server Commit statuses: write, then retry server sync. " + str(exc))
 
     def queue_action(self, user, data):
         if user["role"] != "admin" or self.mode != "server":
@@ -230,5 +244,6 @@ class Service:
         if data.get("action") == "retry":
             result = gh.merge(number)
             self.store.resolve(gh.repo, number)
+            self.report(gh, number)
             return result
         raise ValidationError("Unknown queue action")

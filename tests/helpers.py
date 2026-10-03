@@ -15,6 +15,7 @@ def part(mpn="R-10K"):
 class FakeGitHub:
     def __init__(self, initialized=True):
         self.counter = 0
+        self.statuses = {}
         self.trees, self.commits, self.refs, self.prs = {}, {}, {}, {}
         self.calls = []
         self.before_update = None
@@ -55,6 +56,12 @@ class FakeGitHub:
         return copy.deepcopy(result)
 
     def route(self, method, path, query, data):
+        if method == "GET" and path.startswith("commits/") and path.endswith("/status"):
+            return {"statuses": self.statuses.get(path.split("/")[1], [])}
+        if method == "POST" and path.startswith("statuses/"):
+            sha=path.split("/")[1]
+            self.statuses.setdefault(sha, []).insert(0, copy.deepcopy(data))
+            return data
         if method == "GET" and path.startswith("git/ref/heads/"):
             branch = path.removeprefix("git/ref/heads/")
             if branch not in self.refs: raise RemoteError("Not found",404)

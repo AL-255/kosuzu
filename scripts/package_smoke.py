@@ -11,22 +11,20 @@ from urllib.request import urlopen, Request
 from urllib.error import HTTPError
 
 
-def main():
-    executable=str(Path(sys.argv[1]).resolve())
-    assert subprocess.check_output([executable,"--version"],text=True).strip()=="0.1.0"
+def smoke(executable, mode):
     with tempfile.TemporaryDirectory() as directory:
         log=Path(directory)/"startup.log"
         with log.open("w") as output:
-            process=subprocess.Popen([executable,"server","--state-dir",str(Path(directory)/"state"),"--port","0","--no-browser"],stdout=output,stderr=output)
+            process=subprocess.Popen([executable,mode,"--state-dir",str(Path(directory)/"state"),"--port","0","--no-browser"],stdout=output,stderr=output)
         try:
             url=None
             for _ in range(100):
-                match=re.search(r"Kosuzu 0\.1\.0 server: (http://[^\s]+)",log.read_text())
+                match=re.search(rf"Kosuzu 0\.1\.0 {mode}: (http://[^\s]+)",log.read_text())
                 if match: url=match[1]; break
                 if process.poll() is not None: raise RuntimeError("Frozen server exited before startup")
                 time.sleep(.2)
             if not url: raise RuntimeError("Frozen server did not start within 20 seconds")
-            with urlopen(url+"/api/health",timeout=5) as response: assert json.load(response)["mode"]=="server"
+            with urlopen(url+"/api/health",timeout=5) as response: assert json.load(response)["mode"]==mode
             for path in ("/","/app.js","/style.css","/manifest.webmanifest","/icon-192.png","/icon-512.png"):
                 with urlopen(url+path,timeout=5) as response: assert response.status==200 and len(response.read())>50
             if "--network" in sys.argv:
@@ -45,7 +43,7 @@ def main():
                     assert "Authentication failed" in message,message
                 else: raise AssertionError("Expected GitHub to reject the deliberately invalid token")
                 print("Frozen HTTPS certificate trust verified against GitHub")
-            print("Frozen executable startup, health, and bundled PWA assets passed")
+            print(f"Frozen {mode} startup, health, and bundled PWA assets passed")
         finally:
             if os.name=="nt":
                 # PyInstaller onefile has a bootloader parent and app child.
@@ -55,6 +53,13 @@ def main():
                 process.terminate()
             try: process.wait(timeout=10)
             except subprocess.TimeoutExpired: process.kill(); process.wait(timeout=5)
+
+
+def main():
+    executable=str(Path(sys.argv[1]).resolve())
+    assert subprocess.check_output([executable,"--version"],text=True).strip()=="0.1.0"
+    for mode in ("server", "client"):
+        smoke(executable, mode)
 
 
 if __name__=="__main__": main()

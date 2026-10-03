@@ -20,7 +20,7 @@ SQLite state uses a 0700 directory/0600 file on POSIX and user-profile ACLs on W
 
 HTTPS uses Secure cookies and an explicit origin. Host/Origin checks plus JSON/custom headers protect mutations; there is no cross-origin API. CSP blocks inline scripts/framing/arbitrary script origins. Product requests only accept selected-supplier HTTPS hosts, including redirects. Credentialed requests do not follow redirects. LLM hosts require administrator approval. Images load externally without application credentials.
 
-Queue entries identify a repo/PR or system sync failure and survive restarts. Errors omit upstream bodies and credentials. The periodic worker serializes local merges, checks closed proposals, and retries outboxes.
+Queue entries identify a repo/PR or system sync failure and survive restarts. Errors omit upstream bodies and credentials. The periodic worker serializes local merges, checks closed proposals, and retries outboxes. The server publishes a `kosuzu/inventory` commit status so independent desktop clients can show blocked proposals and actionable failure descriptions. Reporting failures have their own queue entries; they cannot cause an applied delta to repeat and retry on later passes.
 
 ## Extend suppliers
 
