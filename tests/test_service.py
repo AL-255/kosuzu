@@ -26,6 +26,20 @@ class ServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValidationError,"Administrator"): self.service.save_settings(self.client,{"server_token":"bad"})
         self.assertEqual(self.store.setting("github_token"),"server-secret")
 
+    def test_sign_in_restores_profile_and_outbox_identity_after_session_expiry(self):
+        token=self.service.login(self.store.setting("client_key"))
+        user=self.service.session(token)
+        self.service.save_settings(user,{"client_token":"saved-token"})
+        p=self.seed(); event=new_event("adjust",p["id"],1)
+        self.api.offline=True; self.service.submit(user,event); self.api.offline=False
+        self.store.execute("UPDATE sessions SET expires=0 WHERE id=?",(user["id"],))
+        self.assertIsNone(self.service.session(token))
+        restored=self.service.session(self.service.login(self.store.setting("client_key"),token))
+        self.assertEqual(restored["id"],user["id"])
+        self.assertTrue(self.service.public_settings(restored)["client_token_saved"])
+        self.service.flush(restored); self.service.sync()
+        self.assertEqual(self.service.github().inventory()["components"][p["id"]]["quantity"],51)
+
     def test_partial_supplier_credentials_keep_other_saved_fields(self):
         self.service.save_settings(self.admin,{"suppliers":{"arrow":{"api_key":"replacement"}}})
         self.assertEqual(self.store.profile(self.admin["id"])["suppliers"]["arrow"],{"login":"user","api_key":"replacement"})

@@ -36,7 +36,7 @@ On iPhone/iPad use **Safari → Share → Add to Home Screen**. The PWA supplies
 
 Desktop programs submit directly to GitHub; the Linux server discovers their requests. Requests remain pending until a server runs. Use `--port` and `--state-dir` for multiple local instances. Default client state is `%LOCALAPPDATA%\Kosuzu\client` on Windows, `~/Library/Application Support/Kosuzu/client` on macOS, and `$XDG_STATE_HOME/kosuzu/client` or `~/.local/state/kosuzu/client` on Linux.
 
-Session cookies are HttpOnly and SameSite, valid for 30 days. Expired/deleted cookies require configuring that browser again. Signing out revokes the profile and deletes its credentials; pending GitHub PRs remain, but locally queued requests need their original profile to retry. Synchronize before signing out. Revoke a lost device's dedicated GitHub/LLM keys and clear its state.
+Session cookies are HttpOnly and SameSite, valid for 30 days. A separate HttpOnly identity cookie preserves the browser profile for a year, allowing saved credentials/outbox recovery after signing in again. Signing out revokes the session and deletes its credentials; sign in from that same browser and save your keys again to retry queued requests. Deleting all browser cookies loses access to that local profile, so synchronize first. Revoke a lost device's dedicated GitHub/LLM keys and clear its state.
 
 ## Supplier and LLM credentials
 

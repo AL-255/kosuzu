@@ -51,16 +51,16 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' https: data:; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
-        if cookie:
-            self.send_header("Set-Cookie", cookie)
+        for item in ([cookie] if isinstance(cookie, str) else cookie or []):
+            self.send_header("Set-Cookie", item)
         self.end_headers()
         self.wfile.write(data)
 
-    def cookie_token(self):
+    def cookie_token(self, name="kosuzu_session"):
         cookies = SimpleCookie()
         try:
             cookies.load(self.headers.get("Cookie", ""))
-            return cookies["kosuzu_session"].value if "kosuzu_session" in cookies else ""
+            return cookies[name].value if name in cookies else ""
         except Exception:
             return ""
 
@@ -135,9 +135,9 @@ class Handler(BaseHTTPRequestHandler):
                         return self.response(429, {"error": "Too many sign-in attempts; wait one minute"})
                     attempts.append(time.time())
                     self.server.login_attempts[address] = attempts
-                token = service.login(data.get("key", ""))
+                token = service.login(data.get("key", ""), self.cookie_token("kosuzu_identity"))
                 secure = "; Secure" if self.server.public_url.startswith("https:") else ""
-                return self.response(200, {"ok": True}, cookie=f"kosuzu_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000{secure}")
+                return self.response(200, {"ok": True}, cookie=[f"kosuzu_identity={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000{secure}", f"kosuzu_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000{secure}"])
             user = self.user()
             if not user:
                 return self.response(401, {"error": "Sign in with your access key"})

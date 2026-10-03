@@ -7,7 +7,8 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from urllib.request import urlopen
+from urllib.request import urlopen, Request
+from urllib.error import HTTPError
 
 
 def main():
@@ -28,9 +29,30 @@ def main():
             with urlopen(url+"/api/health",timeout=5) as response: assert json.load(response)["mode"]=="server"
             for path in ("/","/app.js","/style.css","/manifest.webmanifest","/icon-192.png","/icon-512.png"):
                 with urlopen(url+path,timeout=5) as response: assert response.status==200 and len(response.read())>50
+            if "--network" in sys.argv:
+                # Deliberately invalid credentials exercise frozen HTTPS trust
+                # without using or persisting any real user API token.
+                key=re.search(r"Administrator access key: ([^\s]+)",log.read_text())[1]
+                def post(path,data,cookie=""):
+                    return urlopen(Request(url+path,data=json.dumps(data).encode(),headers={"Content-Type":"application/json","X-Kosuzu":"1","Cookie":cookie}),timeout=30)
+                with post("/api/login",{"key":key}) as response:
+                    cookie=next(c.split(";",1)[0] for c in response.headers.get_all("Set-Cookie") if c.startswith("kosuzu_session="))
+                with post("/api/settings",{"repo":"AL-255/kosuzu","client_token":"invalid-smoke-token"},cookie): pass
+                try:
+                    urlopen(Request(url+"/api/inventory",headers={"Cookie":cookie}),timeout=30)
+                except HTTPError as exc:
+                    message=json.load(exc)["error"]
+                    assert "Authentication failed" in message,message
+                else: raise AssertionError("Expected GitHub to reject the deliberately invalid token")
+                print("Frozen HTTPS certificate trust verified against GitHub")
             print("Frozen executable startup, health, and bundled PWA assets passed")
         finally:
-            process.terminate()
+            if os.name=="nt":
+                # PyInstaller onefile has a bootloader parent and app child.
+                # TerminateProcess on only the parent leaves the child running.
+                subprocess.run(["taskkill","/PID",str(process.pid),"/T","/F"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,check=False)
+            else:
+                process.terminate()
             try: process.wait(timeout=10)
             except subprocess.TimeoutExpired: process.kill(); process.wait(timeout=5)
 

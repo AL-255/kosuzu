@@ -5,6 +5,7 @@ import json
 import secrets
 import threading
 import time
+import re
 from urllib.parse import urlsplit
 from .github import GitHub
 from .http import RemoteError
@@ -18,15 +19,15 @@ class Service:
         self.store, self.mode, self.github_factory = store, mode, github_factory
         self.sync_lock = threading.Lock()
 
-    def login(self, key):
+    def login(self, key, identity=""):
         key = text(key, "access key", 200, True)
         role = "admin" if hmac.compare_digest(key, self.store.setting("admin_key")) else "client" if hmac.compare_digest(key, self.store.setting("client_key")) else None
         if not role:
             raise ValidationError("Incorrect access key")
-        token = secrets.token_urlsafe(32)
+        token = identity if re.fullmatch(r"[A-Za-z0-9_-]{43}", identity) else secrets.token_urlsafe(32)
         ident = hashlib.sha256(token.encode()).hexdigest()
         self.store.execute("DELETE FROM sessions WHERE expires<?", (time.time(),))
-        self.store.execute("INSERT INTO sessions VALUES (?,?,?)", (ident, role, time.time() + 30 * 86400))
+        self.store.execute("INSERT OR REPLACE INTO sessions VALUES (?,?,?)", (ident, role, time.time() + 30 * 86400))
         return token
 
     def session(self, token):
@@ -116,13 +117,14 @@ class Service:
         part = component(reviewed)
         event = new_event("create", part["id"], data.get("quantity"), part, data.get("note", ""))
         # Stable draft -> transaction mapping survives a lost HTTP response.
-        saved = self.store.setting("draft-event:" + data["draft_id"])
-        if saved:
-            if saved["component"] != part or saved["delta"] != event["delta"] or saved["note"] != event["note"]:
-                raise ValidationError("This import already has a proposal. Retry unchanged or import a new draft")
-            event = saved
-        else:
-            self.store.set_setting("draft-event:" + data["draft_id"], event)
+        with self.store.lock:
+            saved = self.store.setting("draft-event:" + data["draft_id"])
+            if saved:
+                if saved["component"] != part or saved["delta"] != event["delta"] or saved["note"] != event["note"]:
+                    raise ValidationError("This import already has a proposal. Retry unchanged or import a new draft")
+                event = saved
+            else:
+                self.store.set_setting("draft-event:" + data["draft_id"], event)
         return self.submit(user, event)
 
     def adjust(self, user, data):
@@ -131,12 +133,15 @@ class Service:
         event["id"] = ident
         from .model import validate_event
         event = validate_event(event)
-        prior = next((row for row in self.store.outbox(user["id"]) if row["id"] == ident), None)
-        if prior:
-            old = prior["event"]
-            if any(old[k] != event[k] for k in ("delta", "component_id", "note")):
-                raise ValidationError("Request ID already has different content")
-            event = old
+        with self.store.lock:
+            prior = next((row for row in self.store.outbox(user["id"]) if row["id"] == ident), None)
+            if prior:
+                old = prior["event"]
+                if any(old[k] != event[k] for k in ("delta", "component_id", "note")):
+                    raise ValidationError("Request ID already has different content")
+                event = old
+            gh = self.github(user["id"])
+            self.store.queue(user["id"], gh.repo, gh.branch, event)
         return self.submit(user, event)
 
     def submit(self, user, event):
