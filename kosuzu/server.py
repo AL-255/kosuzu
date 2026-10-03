@@ -96,8 +96,8 @@ class Handler(BaseHTTPRequestHandler):
                 if path == "/api/outbox":
                     return self.response(200, service.store.outbox(user["id"]))
                 if path == "/api/queue":
-                    if user["role"] != "admin" or service.mode != "server":
-                        return self.response(403, {"error": "Server administrator access required"})
+                    if service.mode != "server":
+                        return self.response(403, {"error": "Error queue is available in server mode"})
                     return self.response(200, {"errors": service.store.errors(service.store.setting("repo", "")), "last_sync": service.store.setting("last_sync")})
                 return self.response(404, {"error": "Unknown API endpoint"})
             names = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/style.css": "style.css", "/manifest.webmanifest": "manifest.webmanifest", "/sw.js": "sw.js", "/icon.svg": "icon.svg", "/icon-192.png": "icon-192.png", "/icon-512.png": "icon-512.png"}

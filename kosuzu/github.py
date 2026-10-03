@@ -1,6 +1,5 @@
 """GitHub event proposals and atomic validated two-parent merges."""
 import base64
-import hashlib
 import json
 import re
 from urllib.parse import quote, urlencode
@@ -39,7 +38,10 @@ class GitHub:
         value = self.call("GET", "contents/" + quote(path, safe="/") + "?" + urlencode({"ref": ref}))
         if value.get("encoding") != "base64" or not value.get("content"):
             raise ValidationError("Database file missing or too large (GitHub Contents limit)")
-        return json.loads(base64.b64decode(value["content"]))
+        try:
+            return json.loads(base64.b64decode(value["content"]))
+        except (ValueError, UnicodeError):
+            raise ValidationError("Database or proposal file contains invalid JSON") from None
 
     def inventory(self, ref=None):
         return validate_inventory(self.read("inventory.json", ref or self.head()))

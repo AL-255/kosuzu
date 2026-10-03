@@ -6,6 +6,7 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
+from .model import ValidationError
 
 
 class Store:
@@ -70,7 +71,11 @@ class Store:
         return self.execute("SELECT * FROM errors WHERE repo=? ORDER BY status,updated DESC", (repo,))
 
     def queue(self, profile, repo, branch, event):
-        self.execute("INSERT OR IGNORE INTO outbox VALUES (?,?,?,?,?,?,?)", (event["id"], profile, repo, branch, json.dumps(event), json.dumps({"status": "queued"}), time.time()))
+        with self.lock:
+            prior = self.execute("SELECT profile,repo,branch,event FROM outbox WHERE id=?", (event["id"],))
+            if prior and (prior[0]["profile"] != profile or prior[0]["repo"] != repo or prior[0]["branch"] != branch or json.loads(prior[0]["event"]) != event):
+                raise ValidationError("Transaction ID already belongs to another request or database")
+            self.execute("INSERT OR IGNORE INTO outbox VALUES (?,?,?,?,?,?,?)", (event["id"], profile, repo, branch, json.dumps(event), json.dumps({"status": "queued"}), time.time()))
 
     def outbox(self, profile):
         rows = self.execute("SELECT * FROM outbox WHERE profile=? ORDER BY updated DESC", (profile,))

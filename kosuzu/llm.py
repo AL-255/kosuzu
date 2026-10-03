@@ -29,6 +29,7 @@ def refine(part, evidence, config, transport=None):
         if set(value) != {"component", "warnings"} or set(value["component"]) != EDITABLE or not isinstance(value["warnings"], list):
             raise ValidationError("LLM output does not match the expected schema")
         refined = {**part, **value["component"]}
+        refined.pop("id", None)
         warnings = [text(w, "LLM warning", 1000) for w in value["warnings"]]
         if refined["mpn"] != part["mpn"] or refined["manufacturer"] != part["manufacturer"]:
             warnings.append("The LLM changed part identity. Check manufacturer and MPN against the datasheet before confirming.")

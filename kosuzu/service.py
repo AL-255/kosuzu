@@ -83,7 +83,7 @@ class Service:
             for key, credentials in data["suppliers"].items():
                 if key not in REGISTRY or not isinstance(credentials, dict) or set(credentials) - set(REGISTRY[key].credential_fields):
                     raise ValidationError("Unknown supplier or credential fields")
-                current[key] = {k: text(v, "supplier credential", 500) for k, v in credentials.items()}
+                current[key] = {**current.get(key, {}), **{k: text(v, "supplier credential", 500) for k, v in credentials.items()}}
             profile["suppliers"] = current
         server_token = text(data.get("server_token", self.store.setting("github_token", "")), "server token", 500)
         for key, value in (("repo", repo), ("branch", branch), ("llm_hosts", hosts), ("github_token", server_token)):
