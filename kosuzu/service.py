@@ -74,7 +74,7 @@ class Service:
             safe_url(endpoint)
             if urlsplit(endpoint).hostname not in hosts or urlsplit(endpoint).port not in {None, 443} or urlsplit(endpoint).query or urlsplit(endpoint).fragment:
                 raise ValidationError("LLM endpoint must use an administrator-approved HTTPS host")
-            config["model"] = text(config.get("model", "deepseek-chat"), "model", 100, True)
+            config["model"] = text(config.get("model", "deepseek-flash"), "model", 100, True)
             config["api_key"] = text(config.get("api_key", ""), "LLM API key", 500)
             profile["llm"] = config
         if "suppliers" in data:

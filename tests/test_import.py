@@ -78,6 +78,16 @@ class ImportTests(unittest.TestCase):
         result=refine(part(),"evidence",{"api_key":"key"},self.llm_transport({"mpn":"R-100K"}))
         self.assertIn("changed part identity",result["review"]["warnings"][0])
 
+    def test_current_deepseek_default_and_provider_specific_parameters(self):
+        deepseek=self.llm_transport()
+        refine(part(),"evidence",{"api_key":"key"},deepseek)
+        payload=deepseek.calls[0][0][2]
+        self.assertEqual(payload["model"],"deepseek-flash")
+        self.assertEqual(payload["thinking"],{"type":"disabled"})
+        other=self.llm_transport()
+        refine(part(),"evidence",{"api_key":"key","base_url":"https://api.example.com/v1","model":"custom-model"},other)
+        self.assertNotIn("thinking",other.calls[0][0][2])
+
     def test_llm_cannot_replace_urls_or_review(self):
         transport=self.llm_transport({"source_url":"https://evil.example"})
         with self.assertRaises(ValidationError): refine(part(),"evidence",{"api_key":"key"},transport)

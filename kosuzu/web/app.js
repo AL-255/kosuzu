@@ -60,7 +60,7 @@ function renderSettings() {
   $('client-token').placeholder = s.client_token_saved ? 'Saved · leave blank to keep' : 'Dedicated client GitHub token';
   $('llm-key').placeholder = s.llm_key_saved ? 'Saved · leave blank to keep' : 'Your provider API key';
   $('llm-url').value = s.llm.base_url || 'https://api.deepseek.com';
-  $('llm-model').value = s.llm.model || 'deepseek-chat';
+  $('llm-model').value = s.llm.model || 'deepseek-flash';
   $('llm-hosts').value = s.llm_hosts.join(', ');
   $('repo-label').textContent = s.repo || 'Set up your database';
   $('mode-label').textContent = `${s.mode === 'server' ? 'Server workspace' : 'Desktop client'} · ${s.role}`;
