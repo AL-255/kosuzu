@@ -55,6 +55,20 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(self.request("/api/sync",{})[0],403)
         self.assertEqual(self.request("/api/settings",{"server_token":"evil"})[0],400)
         self.assertEqual(self.request("/api/queue")[0],200)
+        self.assertEqual(self.request("/api/pages",{})[0],403)
+
+    def test_pages_publishing_requires_opt_in_and_returns_public_status(self):
+        self.login()
+        self.request("/api/settings", {"repo":"test/library", "server_token":"private-server-token"})
+        self.assertEqual(self.request("/api/pages",{})[0],400)
+        self.request("/api/settings", {"pages_enabled":True})
+        status,body,_=self.request("/api/pages",{})
+        self.assertEqual(status,200)
+        self.assertEqual(json.loads(body)["url"],"https://test.github.io/library/")
+        self.assertNotIn(b"private-server-token",body)
+        self.assertEqual(self.request("/api/pages",{"action":"invalid"})[0],400)
+        self.assertEqual(json.loads(self.request("/api/queue")[1])["pages"]["status"],"building")
+        self.assertEqual(json.loads(self.request("/api/pages",{"action":"unpublish"})[1])["status"],"unpublished")
 
     def test_settings_store_and_return_only_credential_flags(self):
         self.login()

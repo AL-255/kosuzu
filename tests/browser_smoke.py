@@ -218,6 +218,17 @@ def run(browser_type, mobile=False):
             assert width, "Page has horizontal overflow"
             Path("test-results").mkdir(exist_ok=True)
             page.screenshot(path=f"test-results/{'mobile' if mobile else 'desktop'}-inventory.png",full_page=True)
+            page.locator('[data-view="settings"]').click()
+            expect(page.locator("#pages-settings")).to_be_visible()
+            page.locator("#pages-enabled").check(); page.locator("#publish-pages").click()
+            expect(page.locator("#pages-link")).to_have_attribute("href","https://test.github.io/library/")
+            assert upstream.page_site["source"]=={"branch":"kosuzu-pages","path":"/"}
+            exported=service.github().read("data.json",upstream.refs["kosuzu-pages"])
+            assert sum(p["quantity"] for p in exported["parts"])==34
+            page.locator("#unpublish-pages").click()
+            expect(page.locator("#pages-status")).to_contain_text("unpublished")
+            expect(page.locator("#pages-enabled")).not_to_be_checked()
+            assert upstream.page_site is None
             manifest=page.request.get(server.public_url+"/manifest.webmanifest").json()
             assert manifest["display"]=="standalone"
             assert not errors,errors

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kosuzu-inventory"
-version = "0.2.0"
+version = "0.3.0"
 description = "Collaborative electronics inventory backed by GitHub pull requests"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -19,4 +19,4 @@ kosuzu = "kosuzu.cli:main"
 include = ["kosuzu*"]
 
 [tool.setuptools.package-data]
-kosuzu = ["web/*"]
+kosuzu = ["web/*", "catalog_assets/*"]

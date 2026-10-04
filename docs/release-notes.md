@@ -1,11 +1,9 @@
-# Kosuzu v0.2.0
+# Kosuzu v0.3.0
 
-Boxes now have unique names, pictures via HTTPS URLs, and descriptions. A part can hold separate quantities in several boxes, shown together in Inventory. Box cards show contents and totals, and Inventory can search/filter by box.
+Publish a read-only GitHub Pages inventory catalog in the database repository. Visitors can enter a part number or description and search with fuzzy matching entirely in their browser, without tokens or LLM calls. The responsive catalog includes category/box/in-stock filters, specifications, supplier/datasheet/picture links, and quantities per box. Searches keep working after the loaded page loses its network connection.
 
-Stock additions and removals require a box choice when a part has several placements. Transfers move stock between boxes without changing totals. The server checks each selected box's availability, keeps retries idempotent, and rejects stale box edits. Box creation and edits use the existing GitHub request/outbox/error queue flow.
+Server administrators can enable publishing, publish immediately, see status/warnings, and unpublish from Settings. A separate `kosuzu-pages` branch updates after server synchronization; identical exports do not create commits. Existing Pages sites and unmanaged branches are preserved. Pages failures do not block stock merges. Tokens without Pages permission can prepare the branch for manual GitHub configuration.
 
-Adafruit joins DigiKey, Arrow, LCSC and Mouser. Enter a numeric product ID such as 3406 or PID 3406. Its public page supplies metadata, imagery and LLM/manual review evidence without a supplier key. Missing manufacturer/MPN fields use a labeled catalog identity with an explicit review warning.
+Publishing explicitly exposes component metadata, stock, box information and location notes publicly. Receipts, transaction notes, review logs and local credentials are excluded. Stopping updates leaves the website online; unpublishing removes the website but preserves exported Git history. See `docs/setup.md` for permissions and visibility details.
 
-**Upgrade the server and all clients together.** Existing schema 1 stock appears in Unboxed; the first applied transaction upgrades the snapshot to schema 2 while preserving counts, receipts and location notes. v0.1 programs cannot read schema 2. Pending old requests remain readable; ambiguous stock changes need replacement requests with a box choice. Back up inventory/server state before upgrading. See `docs/setup.md`.
-
-Windows, Linux, Intel/Apple Silicon macOS archives, Python wheel and source packages are included. iOS uses Safari Add to Home Screen; desktop executables open a browser UI. macOS binaries are unsigned. Credentials remain local plaintext protected by filesystem permissions. Public supplier pages can block lookups; manual entry remains available. Snapshots should stay below 1 MB with trusted repository collaborators.
+Inventory remains schema 2, compatible with v0.2.0. Earlier v0.1 installations still need the documented server/client schema migration. Includes Windows, Linux, Intel/Apple Silicon macOS archives, Python wheel and source packages. iOS uses the existing Safari PWA. macOS binaries remain unsigned; credentials remain local plaintext protected by filesystem permissions. Supplier/manual/LLM and box workflows are unchanged.

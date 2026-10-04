@@ -9,6 +9,7 @@ import re
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 from .github import GitHub
+from . import catalog
 from .http import RemoteError
 from .llm import refine
 from .model import ValidationError, component, new_event, new_transfer, new_box_event, choose_box, text, safe_url, validate_event, validate_inventory, canonical
@@ -45,7 +46,7 @@ class Service:
 
     def public_settings(self, user):
         profile = self.store.profile(user["id"])
-        return {"repo": self.store.setting("repo", ""), "branch": self.store.setting("branch", "main"), "mode": self.mode, "role": user["role"], "client_token_saved": bool(profile.get("github_token")), "server_token_saved": bool(self.store.setting("github_token")), "llm": {k: v for k, v in profile.get("llm", {}).items() if k != "api_key"}, "llm_key_saved": bool(profile.get("llm", {}).get("api_key")), "supplier_credentials_saved": {k: bool(v) for k, v in profile.get("suppliers", {}).items()}, "supplier_api_ready": {s.key: bool(s.credential_fields) and all(profile.get("suppliers", {}).get(s.key, {}).get(f) for f in s.credential_fields) for s in REGISTRY.values()}, "features": self.features(profile), "onboarding_complete": profile.get("onboarding_complete", False), "onboarding_step": profile.get("onboarding_step", 0), "llm_hosts": self.store.setting("llm_hosts"), "suppliers": [{"key": s.key, "name": s.name, "credential_fields": s.credential_fields} for s in REGISTRY.values()]}
+        return {"pages_enabled": self.store.setting("pages_enabled", False), "pages_status": self.pages_status(), "repo": self.store.setting("repo", ""), "branch": self.store.setting("branch", "main"), "mode": self.mode, "role": user["role"], "client_token_saved": bool(profile.get("github_token")), "server_token_saved": bool(self.store.setting("github_token")), "llm": {k: v for k, v in profile.get("llm", {}).items() if k != "api_key"}, "llm_key_saved": bool(profile.get("llm", {}).get("api_key")), "supplier_credentials_saved": {k: bool(v) for k, v in profile.get("suppliers", {}).items()}, "supplier_api_ready": {s.key: bool(s.credential_fields) and all(profile.get("suppliers", {}).get(s.key, {}).get(f) for f in s.credential_fields) for s in REGISTRY.values()}, "features": self.features(profile), "onboarding_complete": profile.get("onboarding_complete", False), "onboarding_step": profile.get("onboarding_step", 0), "llm_hosts": self.store.setting("llm_hosts"), "suppliers": [{"key": s.key, "name": s.name, "credential_fields": s.credential_fields} for s in REGISTRY.values()]}
 
     @staticmethod
     def features(profile):
@@ -55,11 +56,14 @@ class Service:
     def save_settings(self, user, data):
         if not isinstance(data, dict):
             raise ValidationError("Settings must be an object")
-        if set(data) - {"repo", "branch", "server_token", "client_token", "llm", "suppliers", "llm_hosts", "features", "onboarding_complete", "onboarding_step"}:
+        if set(data) - {"repo", "branch", "server_token", "client_token", "llm", "suppliers", "llm_hosts", "features", "onboarding_complete", "onboarding_step", "pages_enabled"}:
             raise ValidationError("Unknown settings")
-        admin_fields = {"repo", "branch", "server_token", "llm_hosts"}
+        admin_fields = {"repo", "branch", "server_token", "llm_hosts", "pages_enabled"}
         if set(data) & admin_fields and user["role"] != "admin":
             raise ValidationError("Administrator access required for database settings")
+        if "pages_enabled" in data:
+            if self.mode != "server" or type(data["pages_enabled"]) is not bool:
+                raise ValidationError("Pages publishing requires a server and a true/false switch")
         repo = data.get("repo", self.store.setting("repo"))
         branch = data.get("branch", self.store.setting("branch"))
         # Validate repo/branch locally before saving anything, without sending tokens.
@@ -125,6 +129,8 @@ class Service:
         for key, value in (("repo", repo), ("branch", branch), ("llm_hosts", hosts), ("github_token", server_token)):
             if user["role"] == "admin":
                 self.store.set_setting(key, value)
+        if "pages_enabled" in data:
+            self.store.set_setting("pages_enabled", data["pages_enabled"])
         self.store.set_profile(user["id"], profile)
         return self.public_settings(user)
 
@@ -321,12 +327,43 @@ class Service:
                         self.store.resolve(repo, item["number"])
             self.store.resolve(repo, None)
             self.store.set_setting("last_sync", {"time": time.time(), "results": results})
-            return {"results": results}
+            pages = self._publish_pages() if self.store.setting("pages_enabled", False) else None
+            return {"results": results, "pages": pages}
         except (RemoteError, ValidationError) as exc:
             self.store.error(repo, None, str(exc))
             raise
         finally:
             self.sync_lock.release()
+
+    def pages_status(self):
+        status = self.store.setting("pages_status", {})
+        if status.get("repo") != self.store.setting("repo", "") or status.get("branch") != self.store.setting("branch", "main"):
+            return {}
+        return status
+
+    def _publish_pages(self, remove=False):
+        status = {"repo": self.store.setting("repo", ""), "branch": self.store.setting("branch", "main"), "time": time.time()}
+        try:
+            status.update(catalog.unpublish(self.github()) if remove else catalog.publish(self.github()))
+        except (RemoteError, ValidationError) as exc:
+            status.update(status="error", error=str(exc))
+            if isinstance(exc, RemoteError) and exc.status in {403, 404}:
+                status["error"] += " Grant the server token Pages: read/write and Contents: read/write, and check that this repository's plan supports GitHub Pages. Alternatively configure Settings → Pages → Deploy from a branch → kosuzu-pages / (root)."
+        except Exception:
+            status.update(status="error", error="Unexpected catalog publication failure. Stock changes remain applied; retry publishing or check the installed catalog assets")
+        self.store.set_setting("pages_status", status)
+        return status
+
+    def publish_pages(self, user, remove=False):
+        if user["role"] != "admin" or self.mode != "server":
+            raise ValidationError("Server administrator access required")
+        if not remove and not self.store.setting("pages_enabled", False):
+            raise ValidationError("Enable public catalog publishing in Settings first")
+        with self.sync_lock:
+            status = self._publish_pages(remove)
+            if remove and status["status"] != "error":
+                self.store.set_setting("pages_enabled", False)
+            return status
 
     def report(self, gh, number, error=""):
         self.store.set_setting(f"report:{gh.repo}#{number}", error)

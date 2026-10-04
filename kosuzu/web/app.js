@@ -59,6 +59,7 @@ function showView(view) {
 
 function renderSettings() {
   const s = state.settings;
+  $('pages-enabled').checked = !!s.pages_enabled; renderPages(s.pages_status);
   $('setting-repo').value = s.repo; $('setting-branch').value = s.branch;
   $('database-settings').hidden = s.role !== 'admin';
   $('server-token-label').hidden = s.mode !== 'server';
@@ -120,6 +121,7 @@ function renderSetup() {
   if (!state.settings) return;
   const wizard = state.setupStep !== null, step = state.setupStep;
   $('setup-guide').hidden = !wizard; $('setup-actions').hidden = !wizard;
+  $('pages-settings').hidden = wizard || state.settings.mode !== 'server' || state.settings.role !== 'admin';
   $('settings-actions').hidden = wizard; $('start-setup').hidden = wizard;
   $('settings-title').textContent = wizard ? 'Let’s set up your workspace' : 'Connections & settings';
   document.querySelectorAll('[data-setup-step]').forEach(panel => {
@@ -278,6 +280,7 @@ async function loadRequests() {
 async function loadQueue() {
   if (state.settings?.mode !== 'server') return;
   const result = await api('queue'); state.queue = result.errors;
+  renderPages(result.pages);
   const open = result.errors.filter(e => e.status === 'open');
   $('queue-count').textContent = open.length; $('queue-count').hidden = !open.length;
   $('queue-warning').hidden = !open.length;
@@ -361,6 +364,7 @@ $('review-form').addEventListener('submit', async event => {
 });
 async function saveSettings(step=null, extra={}) {
   const data = {...extra};
+  if (step === null && state.settings.mode === 'server' && state.settings.role === 'admin') data.pages_enabled = $('pages-enabled').checked;
   if (step === null || step === 0) {
     if ($('client-token').value.trim()) data.client_token = $('client-token').value.trim();
     if (state.settings.role === 'admin') {
@@ -390,6 +394,26 @@ async function saveSettings(step=null, extra={}) {
   ['client-token','server-token','llm-key'].forEach(id => { $(id).value = ''; });
   renderSettings(); $('settings-saved').textContent = 'Saved.';
 }
+
+function renderPages(status={}) {
+  status ||= {};
+  $('pages-status').textContent = status.status ? `Publication: ${status.status}${status.time ? ' · ' + new Date(status.time * 1000).toLocaleString() : ''}` : 'Not published yet.';
+  $('pages-error').hidden = !status.error && !status.warning; $('pages-error').textContent = status.error || status.warning || ''; $('pages-error').className = status.error ? 'error' : 'small';
+  const url = httpsLink(status.url); $('pages-link').hidden = !url; if (url) $('pages-link').href = url;
+}
+for (const [id,action] of [['publish-pages','publish'],['unpublish-pages','unpublish']]) $(id).addEventListener('click', async event => {
+  clearMessages();
+  try { await busy(event.currentTarget, async () => {
+    if (action === 'publish') {
+      if (!$('pages-enabled').checked) throw new Error('Enable public catalog publishing first. The exported inventory will be publicly readable.');
+      state.settings = await api('settings', {pages_enabled:true});
+    }
+    const status = await api('pages', {action});
+    state.settings = await api('settings'); renderSettings();
+    if (status.error) throw new Error(status.error);
+    notice(action === 'publish' ? status.status === 'prepared' ? 'Catalog files are ready. Follow the Pages configuration instructions below.' : 'Catalog submitted to GitHub Pages. The first deployment can take a few minutes.' : 'Website unpublished. Exported files remain in the repository.');
+  }, action === 'publish' ? 'Publishing…' : 'Unpublishing…'); } catch (error) { showError(error); }
+});
 
 $('settings-form').addEventListener('submit', async event => {
   event.preventDefault();

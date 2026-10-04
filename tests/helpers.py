@@ -16,6 +16,7 @@ class FakeGitHub:
     def __init__(self, initialized=True):
         self.counter = 0
         self.statuses = {}
+        self.page_site = None
         self.trees, self.commits, self.refs, self.prs = {}, {}, {}, {}
         self.calls = []
         self.before_update = None
@@ -57,6 +58,16 @@ class FakeGitHub:
         return copy.deepcopy(result)
 
     def route(self, method, path, query, data):
+        if path == "pages":
+            if method == "GET":
+                if not self.page_site: raise RemoteError("Not found",404)
+                return self.page_site
+            if method == "POST":
+                self.page_site = {**data, "html_url": "https://test.github.io/library/", "status": "building"}
+                return self.page_site
+            if method == "DELETE":
+                self.page_site = None
+                return None
         if method == "GET" and path.startswith("commits/") and path.endswith("/status"):
             return {"statuses": self.statuses.get(path.split("/")[1], [])}
         if method == "POST" and path.startswith("statuses/"):
@@ -73,7 +84,7 @@ class FakeGitHub:
             self.refs[branch] = data["sha"]; return {"object": {"sha": data["sha"]}}
         if method == "GET" and path.startswith("git/commits/"): return self.commits[path.split("/")[-1]]
         if method == "POST" and path == "git/trees":
-            files = copy.deepcopy(self.trees[data["base_tree"]])
+            files = copy.deepcopy(self.trees[data["base_tree"]]) if "base_tree" in data else {}
             for entry in data["tree"]: files[entry["path"]] = entry["content"]
             return {"sha": self.new_tree(files)}
         if method == "POST" and path == "git/commits": return {"sha": self.new_commit(data["tree"],data["parents"])}

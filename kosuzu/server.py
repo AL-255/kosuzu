@@ -102,7 +102,7 @@ class Handler(BaseHTTPRequestHandler):
                     for item in errors:
                         if item["number"] and item["number"] < 0:
                             item["number"] = None
-                    return self.response(200, {"errors": errors, "last_sync": service.store.setting("last_sync")})
+                    return self.response(200, {"errors": errors, "last_sync": service.store.setting("last_sync"), "pages": service.pages_status()})
                 return self.response(404, {"error": "Unknown API endpoint"})
             names = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/style.css": "style.css", "/manifest.webmanifest": "manifest.webmanifest", "/sw.js": "sw.js", "/icon.svg": "icon.svg", "/icon-192.png": "icon-192.png", "/icon-512.png": "icon-512.png"}
             if path not in names or not (WEB / names[path]).is_file():
@@ -163,6 +163,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self.response(200, service.transfer(user, data))
             if path == "/api/box":
                 return self.response(200, service.save_box(user, data))
+            if path == "/api/pages":
+                if user["role"] != "admin" or service.mode != "server":
+                    return self.response(403, {"error": "Server administrator access required"})
+                if data.get("action", "publish") not in {"publish", "unpublish"}:
+                    raise ValidationError("Unknown Pages action")
+                return self.response(200, service.publish_pages(user, data.get("action") == "unpublish"))
             if path == "/api/flush":
                 return self.response(200, service.flush(user))
             if path in {"/api/initialize", "/api/sync", "/api/queue"}:
