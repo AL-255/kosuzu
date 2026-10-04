@@ -100,7 +100,7 @@ def publish(gh):
             current = site(gh)
             if not current:
                 raise
-    return {"url": current["html_url"], "status": current.get("status", "building"), "changed": changed}
+    return {"url": current["html_url"], "status": current.get("status") or "building", "changed": changed}
 
 
 def unpublish(gh):

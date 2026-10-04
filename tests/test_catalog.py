@@ -102,6 +102,15 @@ class CatalogTests(unittest.TestCase):
             self.assertFalse(catalog.publish(self.gh)["changed"])
         self.assertIsNone(self.api.page_site)
 
+    def test_new_site_null_status_is_reported_as_building(self):
+        route = self.api.route
+        def initial_site(method, path, query, data):
+            result = route(method, path, query, data)
+            if method == "POST" and path == "pages": result["status"] = None
+            return result
+        with patch.object(self.api, "route", side_effect=initial_site):
+            self.assertEqual(catalog.publish(self.gh)["status"], "building")
+
     def test_server_opt_in_permissions_failures_and_unpublish(self):
         with tempfile.TemporaryDirectory() as directory:
             store = Store(directory)
