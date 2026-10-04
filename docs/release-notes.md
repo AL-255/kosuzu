@@ -1,4 +1,4 @@
-# Kosuzu v0.3.1
+# Kosuzu v0.3.2
 
 Publish a read-only GitHub Pages inventory catalog in the database repository. Visitors can enter a part number or description and search with fuzzy matching entirely in their browser, without tokens or LLM calls. The responsive catalog includes category/box/in-stock filters, specifications, supplier/datasheet/picture links, and quantities per box. Searches keep working after the loaded page loses its network connection.
 
