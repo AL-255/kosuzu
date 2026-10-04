@@ -34,6 +34,9 @@ class GitHub:
     def head(self):
         return self.call("GET", "git/ref/heads/" + quote(self.branch, safe=""))["object"]["sha"]
 
+    def repository(self):
+        return self.transport.request("GET", f"https://api.github.com/repos/{self.repo}", headers=self.headers)
+
     def read(self, path, ref):
         value = self.call("GET", "contents/" + quote(path, safe="/") + "?" + urlencode({"ref": ref}))
         if value.get("encoding") != "base64" or not value.get("content"):
@@ -47,7 +50,24 @@ class GitHub:
         return validate_inventory(self.read("inventory.json", ref or self.head()))
 
     def initialize(self):
-        head = self.head()
+        try:
+            head = self.head()
+        except RemoteError as exc:
+            if exc.status != 409:
+                raise
+            # Git objects cannot be written into an empty repository. Contents
+            # can create the first commit, and omitting sha prevents overwrites.
+            default = self.repository()["default_branch"]
+            if self.branch != default:
+                raise ValidationError(f"This repository is empty. Use its default branch ({default}) to initialize it")
+            try:
+                self.call("PUT", "contents/inventory.json", {"message": "Initialize Kosuzu inventory", "branch": self.branch, "content": base64.b64encode(canonical(empty_inventory()).encode()).decode()})
+            except RemoteError as race:
+                if race.status not in {409, 422}:
+                    raise
+                self.inventory()  # Another initializer won; verify its snapshot.
+                return False
+            return True
         try:
             self.inventory(head)
             return False

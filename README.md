@@ -1,8 +1,10 @@
 # Kosuzu
 
-Collaborative electronics component inventory backed by GitHub pull requests. Import distributor parts, review them with your LLM, and keep shared shelves in sync.
+Collaborative electronics component inventory backed by GitHub pull requests. Import distributor parts, review them yourself or with your LLM, and keep shared shelves in sync.
 
-- Modular DigiKey, Arrow, LCSC, and Mouser importers with product images, user-key LLM refinement, and human confirmation.
+- Step-by-step setup with a saved progress checkpoint and GitHub connection check.
+- Modular DigiKey, Arrow, LCSC, and Mouser importers with product images, optional user-key LLM refinement, and human confirmation.
+- Supplier/API switches, public-page fallback, and manual part entry without supplier or LLM credentials.
 - Atomic quantity updates prevent concurrent overspending; persistent client outboxes recover from network failures.
 - Linux server automatically applies valid PRs and exposes warnings plus retry/reject actions in a persistent error queue.
 - Responsive web UI, standalone Windows/macOS/Linux clients, and an installable iOS PWA.
@@ -15,7 +17,7 @@ kosuzu client
 kosuzu server --state-dir /var/lib/kosuzu --no-browser
 ```
 
-Download a platform archive or Python wheel from [Releases](https://github.com/AL-255/kosuzu/releases). Extract the archive and run `kosuzu` (`kosuzu.exe` on Windows) from a terminal. The first launch prints an access key and opens the local web UI. Create a separate GitHub database repository with an initial README commit, configure dedicated tokens in Settings, and initialize the library. The server hosts the same responsive app for browsers and iOS via Safari **Add to Home Screen** over HTTPS.
+Download a platform archive or Python wheel from [Releases](https://github.com/AL-255/kosuzu/releases). Extract the archive and run `kosuzu` (`kosuzu.exe` on Windows) from a terminal. The first launch prints an access key and opens the local web UI. Create a separate GitHub database repository, follow the setup guide to save dedicated GitHub tokens and initialize the library. Supplier and LLM keys are optional; their features can be enabled later in Settings. The server hosts the same responsive app for browsers and iOS via Safari **Add to Home Screen** over HTTPS.
 
 Development: `python -m unittest discover -s tests -v`.
 

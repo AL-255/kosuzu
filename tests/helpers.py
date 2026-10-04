@@ -47,7 +47,8 @@ class FakeGitHub:
     def request(self, method, url, data=None, headers=None, raw=False):
         if self.offline: raise RemoteError("Network unavailable")
         parsed = urlsplit(url)
-        path = unquote(parsed.path.split("/", 4)[4]); query = parse_qs(parsed.query)
+        segments = parsed.path.split("/", 4)
+        path = unquote(segments[4]) if len(segments)>4 else ""; query = parse_qs(parsed.query)
         self.calls.append((method, path, copy.deepcopy(data)))
         result = self.route(method, path, query, data)
         if self.fail_after == (method, path):

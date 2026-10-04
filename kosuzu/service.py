@@ -6,11 +6,12 @@ import secrets
 import threading
 import time
 import re
+from datetime import datetime, timezone
 from urllib.parse import urlsplit
 from .github import GitHub
 from .http import RemoteError
 from .llm import refine
-from .model import ValidationError, component, new_event, text
+from .model import ValidationError, component, new_event, text, safe_url
 from .suppliers import REGISTRY, lookup
 
 
@@ -44,12 +45,17 @@ class Service:
 
     def public_settings(self, user):
         profile = self.store.profile(user["id"])
-        return {"repo": self.store.setting("repo", ""), "branch": self.store.setting("branch", "main"), "mode": self.mode, "role": user["role"], "client_token_saved": bool(profile.get("github_token")), "server_token_saved": bool(self.store.setting("github_token")), "llm": {k: v for k, v in profile.get("llm", {}).items() if k != "api_key"}, "llm_key_saved": bool(profile.get("llm", {}).get("api_key")), "supplier_credentials_saved": {k: bool(v) for k, v in profile.get("suppliers", {}).items()}, "llm_hosts": self.store.setting("llm_hosts"), "suppliers": [{"key": s.key, "name": s.name, "credential_fields": s.credential_fields} for s in REGISTRY.values()]}
+        return {"repo": self.store.setting("repo", ""), "branch": self.store.setting("branch", "main"), "mode": self.mode, "role": user["role"], "client_token_saved": bool(profile.get("github_token")), "server_token_saved": bool(self.store.setting("github_token")), "llm": {k: v for k, v in profile.get("llm", {}).items() if k != "api_key"}, "llm_key_saved": bool(profile.get("llm", {}).get("api_key")), "supplier_credentials_saved": {k: bool(v) for k, v in profile.get("suppliers", {}).items()}, "supplier_api_ready": {s.key: bool(s.credential_fields) and all(profile.get("suppliers", {}).get(s.key, {}).get(f) for f in s.credential_fields) for s in REGISTRY.values()}, "features": self.features(profile), "onboarding_complete": profile.get("onboarding_complete", False), "onboarding_step": profile.get("onboarding_step", 0), "llm_hosts": self.store.setting("llm_hosts"), "suppliers": [{"key": s.key, "name": s.name, "credential_fields": s.credential_fields} for s in REGISTRY.values()]}
+
+    @staticmethod
+    def features(profile):
+        saved = profile.get("features", {})
+        return {"llm_enabled": saved.get("llm_enabled", True), "llm_fallback": saved.get("llm_fallback", True), "suppliers": {key: {"enabled": True, "use_api": True, "public_fallback": True, **saved.get("suppliers", {}).get(key, {})} for key in REGISTRY}}
 
     def save_settings(self, user, data):
         if not isinstance(data, dict):
             raise ValidationError("Settings must be an object")
-        if set(data) - {"repo", "branch", "server_token", "client_token", "llm", "suppliers", "llm_hosts"}:
+        if set(data) - {"repo", "branch", "server_token", "client_token", "llm", "suppliers", "llm_hosts", "features", "onboarding_complete", "onboarding_step"}:
             raise ValidationError("Unknown settings")
         admin_fields = {"repo", "branch", "server_token", "llm_hosts"}
         if set(data) & admin_fields and user["role"] != "admin":
@@ -60,17 +66,44 @@ class Service:
         if repo:
             GitHub("validation", repo, branch)
         profile = self.store.profile(user["id"])
+        if "features" in data:
+            features = data["features"]
+            if not isinstance(features, dict) or set(features) - {"llm_enabled", "llm_fallback", "suppliers"}:
+                raise ValidationError("Invalid feature settings")
+            merged = self.features(profile)
+            for key in ("llm_enabled", "llm_fallback"):
+                if key in features:
+                    if type(features[key]) is not bool:
+                        raise ValidationError("Feature switches must be true or false")
+                    merged[key] = features[key]
+            suppliers = features.get("suppliers", {})
+            if not isinstance(suppliers, dict):
+                raise ValidationError("Invalid supplier switches")
+            for key, switches in suppliers.items():
+                if key not in REGISTRY or not isinstance(switches, dict) or set(switches) - {"enabled", "use_api", "public_fallback"} or any(type(v) is not bool for v in switches.values()):
+                    raise ValidationError("Invalid supplier switches")
+                merged["suppliers"][key].update(switches)
+            profile["features"] = merged
+        if "onboarding_step" in data:
+            if type(data["onboarding_step"]) is not int or not 0 <= data["onboarding_step"] <= 3:
+                raise ValidationError("Invalid setup step")
+            profile["onboarding_step"] = data["onboarding_step"]
+        if "onboarding_complete" in data:
+            if type(data["onboarding_complete"]) is not bool:
+                raise ValidationError("Invalid setup completion")
+            profile["onboarding_complete"] = data["onboarding_complete"]
         if "client_token" in data:
             profile["github_token"] = text(data["client_token"], "client token", 500)
         hosts = data.get("llm_hosts", self.store.setting("llm_hosts"))
         if not isinstance(hosts, list) or len(hosts) > 20 or any(not isinstance(h, str) or not h or "/" in h or ":" in h for h in hosts):
             raise ValidationError("LLM hosts must be a list of HTTPS host names")
         if "llm" in data:
+            if not isinstance(data["llm"], dict):
+                raise ValidationError("Invalid LLM configuration")
             config = {**profile.get("llm", {}), **data["llm"]}
             if set(config) - {"base_url", "model", "api_key"}:
                 raise ValidationError("Unknown LLM configuration")
             endpoint = config.get("base_url", "https://api.deepseek.com")
-            from .model import safe_url
             safe_url(endpoint)
             if urlsplit(endpoint).hostname not in hosts or urlsplit(endpoint).port not in {None, 443} or urlsplit(endpoint).query or urlsplit(endpoint).fragment:
                 raise ValidationError("LLM endpoint must use an administrator-approved HTTPS host")
@@ -87,6 +120,8 @@ class Service:
                 current[key] = {**current.get(key, {}), **{k: text(v, "supplier credential", 500) for k, v in credentials.items()}}
             profile["suppliers"] = current
         server_token = text(data.get("server_token", self.store.setting("github_token", "")), "server token", 500)
+        if data.get("onboarding_complete") and (not repo or not profile.get("github_token") or (self.mode == "server" and user["role"] == "admin" and not server_token)):
+            raise ValidationError("Save the repository and required GitHub tokens before finishing setup")
         for key, value in (("repo", repo), ("branch", branch), ("llm_hosts", hosts), ("github_token", server_token)):
             if user["role"] == "admin":
                 self.store.set_setting(key, value)
@@ -96,12 +131,61 @@ class Service:
     def import_part(self, user, data):
         profile = self.store.profile(user["id"])
         supplier = data.get("supplier")
-        # Fail before supplier requests if refinement cannot run.
-        if not profile.get("llm", {}).get("api_key"):
-            raise ValidationError("Save your LLM API key before importing")
-        part, evidence = lookup(supplier, data.get("code"), profile.get("suppliers", {}).get(supplier, {}), product_url=data.get("product_url", ""))
-        reviewed = refine(part, evidence, profile["llm"])
+        features = self.features(profile)
+        warnings = []
+        if supplier == "manual":
+            fields = data.get("manual", {})
+            if not isinstance(fields, dict) or set(fields) - {"manufacturer", "mpn", "description", "source_url", "datasheet_url", "image_url"}:
+                raise ValidationError("Invalid manual component fields")
+            part = {"supplier": "manual", "supplier_code": text(fields.get("mpn", ""), "mpn", required=True), **fields}
+            evidence = "User-entered information; no distributor lookup was performed."
+            warnings.append("This part was entered manually. No distributor lookup was performed.")
+        else:
+            if supplier not in REGISTRY:
+                raise ValidationError("Unknown supplier")
+            options = features["suppliers"][supplier]
+            if not options["enabled"]:
+                raise ValidationError("This supplier is disabled in Settings. Enable it or enter the part manually")
+            if features["llm_enabled"] and not features["llm_fallback"] and not profile.get("llm", {}).get("api_key"):
+                raise ValidationError("Save your LLM API key, enable manual fallback, or turn off LLM review in Settings")
+            credentials = profile.get("suppliers", {}).get(supplier, {})
+            fields = REGISTRY[supplier].credential_fields
+            use_api = bool(fields) and options["use_api"] and all(credentials.get(f) for f in fields)
+            if fields and options["use_api"] and not use_api and not options["public_fallback"]:
+                raise ValidationError("Supplier API credentials are incomplete. Save all required fields or enable public-page fallback")
+            try:
+                part, evidence = lookup(supplier, data.get("code"), credentials if use_api else {}, product_url=data.get("product_url", ""))
+            except RemoteError:
+                if not use_api or not options["public_fallback"]:
+                    raise
+                part, evidence = lookup(supplier, data.get("code"), {}, product_url=data.get("product_url", ""))
+                warnings.append("The supplier API was unavailable. Details were retrieved from its public page instead.")
+        # Validate user/supplier metadata before sending anything to an LLM.
+        part = component({**part, "review": {"model": "manual", "checked_at": datetime.now(timezone.utc).isoformat(), "warnings": [], "confirmed": True}})
+        part["review"]["confirmed"] = False
+        if features["llm_enabled"] and profile.get("llm", {}).get("api_key"):
+            try:
+                reviewed = refine(part, evidence, profile["llm"])
+            except (RemoteError, ValidationError):
+                if not features["llm_fallback"]:
+                    raise
+                reviewed = part
+                warnings.append("LLM review failed. The original details are unchanged; review them manually against the datasheet.")
+        else:
+            if features["llm_enabled"] and not features["llm_fallback"]:
+                raise ValidationError("Save your LLM API key, enable manual fallback, or turn off LLM review in Settings")
+            reviewed = part
+            warnings.append("LLM review is disabled." if not features["llm_enabled"] else "No LLM key is saved; using manual review.")
+        if reviewed["review"]["model"] == "manual":
+            warnings.append("Check manufacturer, MPN, package and electrical specifications against the datasheet before confirming.")
+        reviewed = {**reviewed, "review": {**reviewed["review"], "warnings": reviewed["review"]["warnings"] + warnings, "confirmed": False}}
         return {"draft_id": self.store.draft(user["id"], reviewed), "original": part, "component": reviewed}
+
+    def check_connection(self, user):
+        inventory = self.github(user["id"]).inventory()
+        if self.mode == "server" and user["role"] == "admin":
+            self.github().inventory()
+        return {"revision": inventory["revision"], "components": len(inventory["components"])}
 
     def create(self, user, data):
         draft = self.store.read_draft(data.get("draft_id", ""), user["id"])

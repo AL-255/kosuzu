@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from kosuzu.model import ValidationError, new_event
+from kosuzu.http import RemoteError
 from kosuzu.service import Service
 from kosuzu.store import Store
 from tests.helpers import FakeGitHub, part
@@ -70,6 +71,116 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(self.service.inventory(self.client)["inventory"]["components"][candidate["id"]]["quantity"],10)
         self.assertEqual(self.store.outbox(self.client["id"])[0]["result"]["status"],"applied")
         self.assertEqual(len(self.api.prs),2)
+
+    def test_no_llm_key_uses_confirmed_manual_review_lifecycle(self):
+        candidate=part()
+        with patch("kosuzu.service.lookup",return_value=(candidate,"evidence")),patch("kosuzu.service.refine") as llm:
+            result=self.service.import_part(self.client,{"supplier":"lcsc","code":"C25804"})
+        llm.assert_not_called()
+        self.assertEqual(result["component"]["review"]["model"],"manual")
+        self.assertFalse(result["component"]["review"]["confirmed"])
+        self.assertIn("No LLM key",str(result["component"]["review"]["warnings"]))
+        with self.assertRaisesRegex(ValidationError,"Confirm"):
+            self.service.create(self.client,{"draft_id":result["draft_id"],"quantity":3})
+        self.service.create(self.client,{"draft_id":result["draft_id"],"confirmed":True,"quantity":3})
+        self.service.sync()
+        saved=self.service.inventory(self.client)["inventory"]["components"][candidate["id"]]
+        self.assertEqual(saved["quantity"],3)
+        self.assertEqual(saved["component"]["review"]["model"],"manual")
+
+    def test_disabled_llm_never_sends_saved_key(self):
+        self.service.save_settings(self.admin,{"features":{"llm_enabled":False}})
+        with patch("kosuzu.service.lookup",return_value=(part(),"evidence")),patch("kosuzu.service.refine") as llm:
+            result=self.service.import_part(self.admin,{"supplier":"lcsc","code":"C25804"})
+        llm.assert_not_called(); self.assertEqual(result["component"]["review"]["model"],"manual")
+        self.assertEqual(self.store.profile(self.admin["id"])["llm"]["api_key"],"llm-secret")
+
+    def test_llm_failure_falls_back_with_warning_only_when_allowed(self):
+        for failure in (RemoteError("provider unavailable"),ValidationError("truncated output")):
+            with patch("kosuzu.service.lookup",return_value=(part(),"evidence")),patch("kosuzu.service.refine",side_effect=failure):
+                result=self.service.import_part(self.admin,{"supplier":"lcsc","code":"C25804"})
+            self.assertEqual(result["component"]["mpn"],part()["mpn"])
+            self.assertIn("LLM review failed",str(result["component"]["review"]["warnings"]))
+        self.service.save_settings(self.admin,{"features":{"llm_fallback":False}})
+        with patch("kosuzu.service.lookup",return_value=(part(),"evidence")),patch("kosuzu.service.refine",side_effect=RemoteError("provider unavailable")):
+            with self.assertRaises(RemoteError): self.service.import_part(self.admin,{"supplier":"lcsc","code":"C25804"})
+
+    def test_required_llm_without_key_fails_before_supplier_request(self):
+        self.service.save_settings(self.client,{"features":{"llm_fallback":False}})
+        with patch("kosuzu.service.lookup") as lookup:
+            with self.assertRaisesRegex(ValidationError,"LLM API key"):
+                self.service.import_part(self.client,{"supplier":"lcsc","code":"C25804"})
+        lookup.assert_not_called()
+
+    def test_disabled_supplier_is_rejected_even_with_direct_api_call(self):
+        self.service.save_settings(self.admin,{"features":{"suppliers":{"lcsc":{"enabled":False}}}})
+        with patch("kosuzu.service.lookup") as lookup:
+            with self.assertRaisesRegex(ValidationError,"disabled"):
+                self.service.import_part(self.admin,{"supplier":"lcsc","code":"C25804"})
+        lookup.assert_not_called()
+
+    def test_supplier_api_fallback_and_public_only_do_not_send_credentials(self):
+        self.service.save_settings(self.admin,{"features":{"llm_enabled":False}})
+        candidate=part(); candidate["supplier"]="arrow"
+        with patch("kosuzu.service.lookup",side_effect=[RemoteError("API unavailable"),(candidate,"public evidence")]) as lookup:
+            result=self.service.import_part(self.admin,{"supplier":"arrow","code":"R-10K"})
+        self.assertEqual(lookup.call_args_list[0].args[2],{"login":"user","api_key":"arrow-secret"})
+        self.assertEqual(lookup.call_args_list[1].args[2],{})
+        self.assertIn("public page instead",str(result["component"]["review"]["warnings"]))
+        self.service.save_settings(self.admin,{"features":{"suppliers":{"arrow":{"use_api":False}}}})
+        with patch("kosuzu.service.lookup",return_value=(candidate,"public evidence")) as lookup:
+            self.service.import_part(self.admin,{"supplier":"arrow","code":"R-10K"})
+        self.assertEqual(lookup.call_args.args[2],{})
+
+    def test_supplier_strict_api_missing_fields_and_failure_stop_import(self):
+        self.service.save_settings(self.client,{"features":{"suppliers":{"digikey":{"public_fallback":False}}}})
+        with patch("kosuzu.service.lookup") as lookup:
+            with self.assertRaisesRegex(ValidationError,"incomplete"):
+                self.service.import_part(self.client,{"supplier":"digikey","code":"123"})
+        lookup.assert_not_called()
+        self.service.save_settings(self.admin,{"features":{"suppliers":{"arrow":{"public_fallback":False}}}})
+        with patch("kosuzu.service.lookup",side_effect=RemoteError("API unavailable")) as lookup:
+            with self.assertRaises(RemoteError): self.service.import_part(self.admin,{"supplier":"arrow","code":"R-10K"})
+        self.assertEqual(lookup.call_count,1)
+
+    def test_ambiguous_supplier_data_never_falls_back_to_another_source(self):
+        with patch("kosuzu.service.lookup",side_effect=ValidationError("ambiguous identity")) as lookup:
+            with self.assertRaisesRegex(ValidationError,"ambiguous"):
+                self.service.import_part(self.admin,{"supplier":"arrow","code":"R-10K"})
+        self.assertEqual(lookup.call_count,1)
+
+    def test_manual_entry_works_with_every_optional_feature_disabled(self):
+        features={"llm_enabled":False,"suppliers":{key:{"enabled":False} for key in self.service.public_settings(self.client)["features"]["suppliers"]}}
+        self.service.save_settings(self.client,{"features":features})
+        with patch("kosuzu.service.lookup") as lookup,patch("kosuzu.service.refine") as llm:
+            result=self.service.import_part(self.client,{"supplier":"manual","manual":{"manufacturer":"Test","mpn":"M-1","description":"A manually entered part","datasheet_url":"https://example.com/datasheet.pdf"}})
+        lookup.assert_not_called(); llm.assert_not_called()
+        self.assertEqual(result["component"]["supplier"],"manual")
+        self.assertFalse(result["component"]["review"]["confirmed"])
+        self.service.create(self.client,{"draft_id":result["draft_id"],"confirmed":True,"quantity":2})
+        self.service.sync()
+        self.assertEqual(self.service.check_connection(self.client)["components"],1)
+        with self.assertRaises(ValidationError): self.service.import_part(self.client,{"supplier":"manual","manual":{"manufacturer":"Test","mpn":"M-2","description":"Part","datasheet_url":"http://example.com"}})
+
+    def test_setup_and_switches_persist_without_overwriting_keys(self):
+        self.service.save_settings(self.admin,{"onboarding_step":2,"features":{"suppliers":{"arrow":{"enabled":False}},"llm_enabled":False}})
+        self.service.save_settings(self.admin,{"features":{"llm_fallback":False}})
+        reopened=Store(self.temp.name); self.addCleanup(reopened.db.close)
+        public=Service(reopened,"server",self.api.factory).public_settings(self.admin)
+        self.assertEqual(public["onboarding_step"],2)
+        self.assertFalse(public["features"]["llm_enabled"])
+        self.assertFalse(public["features"]["suppliers"]["arrow"]["enabled"])
+        self.assertTrue(public["supplier_api_ready"]["arrow"])
+        self.assertTrue(public["llm_key_saved"])
+        self.service.save_settings(self.admin,{"onboarding_complete":True})
+        self.assertTrue(self.service.public_settings(self.admin)["onboarding_complete"])
+
+    def test_invalid_switches_and_incomplete_setup_do_not_save(self):
+        for value in ({"llm_enabled":"false"},{"suppliers":{"lcsc":{"enabled":1}}},{"unknown":True},{"suppliers":{"unknown":{"enabled":False}}}):
+            with self.assertRaises(ValidationError): self.service.save_settings(self.client,{"features":value})
+        user=self.service.session(self.service.login(self.store.setting("client_key")))
+        with self.assertRaisesRegex(ValidationError,"GitHub tokens"): self.service.save_settings(user,{"onboarding_complete":True})
+        self.assertFalse(self.service.public_settings(user)["onboarding_complete"])
 
     def seed(self):
         p=part(); gh=self.service.github(self.admin["id"]); pr=gh.submit(new_event("create",p["id"],50,p)); self.service.sync(); return p

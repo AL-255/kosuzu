@@ -153,6 +153,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.response(200, service.save_settings(user, data))
             if path == "/api/import":
                 return self.response(200, service.import_part(user, data))
+            if path == "/api/connection":
+                return self.response(200, service.check_connection(user))
             if path == "/api/create":
                 return self.response(200, service.create(user, data))
             if path == "/api/adjust":

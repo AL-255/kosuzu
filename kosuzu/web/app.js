@@ -1,7 +1,7 @@
 'use strict';
 const $ = id => document.getElementById(id);
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const state = {settings:null, inventory:null, draft:null, currentView:'inventory', stockId:null, stockRequest:null, loading:false, queue:[]};
+const state = {settings:null, inventory:null, draft:null, currentView:'inventory', stockId:null, stockRequest:null, loading:false, queue:[], setupStep:null, connectionChecked:false};
 const names = {inventory:'Inventory', import:'New component', requests:'My requests', queue:'Error queue', settings:'Settings'};
 
 async function api(path, body) {
@@ -21,8 +21,9 @@ async function api(path, body) {
 function signedOut() {
   $('workspace').hidden = true; $('login-view').hidden = false;
   state.settings = null; state.draft = null; state.inventory = null;
+  state.setupStep = null; state.connectionChecked = false;
 }
-function showError(error, id='global-error') { $(id).textContent = error.message || String(error); $(id).hidden = false; }
+function showError(error, id='global-error') { $(id).textContent = error.message || String(error); $(id).hidden = false; if (id === 'global-error' && state.setupStep !== null) $(id).scrollIntoView({block:'start'}); }
 function notice(message) { $('notice').textContent = message; $('notice').hidden = false; }
 function clearMessages() { $('notice').hidden = true; $('global-error').hidden = true; }
 function number(value) { return Number(value).toLocaleString(); }
@@ -40,6 +41,7 @@ function showView(view) {
   if (!names[view]) view = 'inventory';
   if (view === 'queue' && state.settings?.mode !== 'server') view = 'inventory';
   state.currentView = view;
+  if (view !== 'settings' && state.setupStep !== null) { state.setupStep = null; renderSetup(); }
   document.querySelectorAll('.view').forEach(section => { section.hidden = section.id !== 'view-' + view; });
   document.querySelectorAll('.nav').forEach(button => button.classList.toggle('active', button.dataset.view === view));
   $('breadcrumb').textContent = 'Workspace / ' + names[view];
@@ -61,24 +63,92 @@ function renderSettings() {
   $('llm-key').placeholder = s.llm_key_saved ? 'Saved · leave blank to keep' : 'Your provider API key';
   $('llm-url').value = s.llm.base_url || 'https://api.deepseek.com';
   $('llm-model').value = s.llm.model || 'deepseek-flash';
+  $('llm-enabled').checked = s.features.llm_enabled;
+  $('llm-fallback').checked = s.features.llm_fallback;
   $('llm-hosts').value = s.llm_hosts.join(', ');
   $('repo-label').textContent = s.repo || 'Set up your database';
   $('mode-label').textContent = `${s.mode === 'server' ? 'Server workspace' : 'Desktop client'} · ${s.role}`;
   const selected = $('supplier').value;
-  $('supplier').innerHTML = s.suppliers.map(supplier => `<option value="${escapeHTML(supplier.key)}">${escapeHTML(supplier.name)}</option>`).join('');
-  if (selected) $('supplier').value = selected;
-  else $('supplier').value = 'lcsc';
-  $('supplier-credentials').innerHTML = s.suppliers.filter(supplier => supplier.credential_fields.length).map(supplier => `<div class="supplier-box"><h3>${escapeHTML(supplier.name)} ${s.supplier_credentials_saved[supplier.key] ? '· credentials saved' : ''}</h3><div class="form-grid">${supplier.credential_fields.map(field => `<label>${escapeHTML(field.replaceAll('_',' '))}<input type="password" autocomplete="new-password" data-supplier="${escapeHTML(supplier.key)}" data-field="${escapeHTML(field)}" placeholder="Leave blank to keep saved credentials"></label>`).join('')}</div></div>`).join('');
+  const enabled = s.suppliers.filter(supplier => s.features.suppliers[supplier.key].enabled);
+  $('supplier').innerHTML = enabled.map(supplier => `<option value="${escapeHTML(supplier.key)}">${escapeHTML(supplier.name)}</option>`).join('') + '<option value="manual">Enter details manually</option>';
+  $('supplier').value = enabled.some(v => v.key === selected) || selected === 'manual' ? selected : enabled.some(v => v.key === 'lcsc') ? 'lcsc' : enabled[0]?.key || 'manual';
+  $('supplier-credentials').innerHTML = s.suppliers.map(supplier => {
+    const key = escapeHTML(supplier.key), options = s.features.suppliers[supplier.key];
+    return `<div class="supplier-box" data-supplier-box="${key}"><label class="feature-switch"><input type="checkbox" role="switch" data-feature-supplier="${key}" data-switch="enabled" ${options.enabled ? 'checked' : ''}><span>${escapeHTML(supplier.name)}<small>${supplier.credential_fields.length ? s.supplier_api_ready[supplier.key] ? 'API credentials saved' : 'Can try public pages · API credentials optional' : 'Public product pages · no API key needed'}</small></span></label><div data-supplier-options ${options.enabled ? '' : 'hidden'}>${supplier.credential_fields.length ? `<label class="feature-switch"><input type="checkbox" role="switch" data-feature-supplier="${key}" data-switch="use_api" ${options.use_api ? 'checked' : ''}><span>Use supplier API when configured<small>Turn off to use public pages only.</small></span></label><label class="feature-switch" data-fallback-label ${options.use_api ? '' : 'hidden'}><input type="checkbox" role="switch" data-feature-supplier="${key}" data-switch="public_fallback" ${options.public_fallback ? 'checked' : ''}><span>Allow public-page fallback<small>Try public pages if API credentials are missing or the API is unavailable.</small></span></label><details data-api-fields ${options.use_api ? '' : 'hidden'}><summary>Add or update API credentials (optional)</summary><div class="form-grid">${supplier.credential_fields.map(field => `<label>${escapeHTML(field.replaceAll('_',' '))}<input type="password" autocomplete="new-password" data-supplier="${key}" data-field="${escapeHTML(field)}" placeholder="Blank keeps saved credentials"></label>`).join('')}</div></details>` : '<p class="small">Use the C-code printed on your bag, such as C25804.</p>'}</div></div>`;
+  }).join('');
+  $('shared-database').hidden = s.role === 'admin';
+  $('shared-database').textContent = s.repo ? `Your workspace uses ${s.repo} (${s.branch}). The administrator manages this connection.` : 'Your administrator needs to connect the workspace repository before you can continue.';
+  renderFeatureControls(); renderImportMode(); renderSetup();
 }
+
+function renderFeatureControls() {
+  const enabled = $('llm-enabled').checked;
+  $('llm-fields').hidden = !enabled; $('llm-fallback-label').hidden = !enabled;
+  $('llm-status').textContent = !enabled ? 'Manual review selected. No LLM requests will be made.' : $('llm-fallback').checked ? 'Without a key, you can still import and check details yourself.' : 'LLM review is required. Imports stop if no key is saved or the provider fails.';
+  document.querySelectorAll('[data-supplier-box]').forEach(box => {
+    const active = box.querySelector('[data-switch="enabled"]').checked;
+    box.querySelector('[data-supplier-options]').hidden = !active;
+    const api = box.querySelector('[data-switch="use_api"]');
+    if (api) { box.querySelector('[data-api-fields]').hidden = !api.checked; box.querySelector('[data-fallback-label]').hidden = !api.checked; }
+  });
+}
+
+function renderImportMode() {
+  const manual = $('supplier').value === 'manual';
+  $('manual-fields').hidden = !manual; $('supplier-code-label').hidden = manual; $('product-url-label').hidden = manual;
+  $('supplier-code').disabled = manual; $('product-url').disabled = manual;
+  document.querySelectorAll('#manual-fields input, #manual-fields textarea').forEach(input => { input.disabled = !manual; });
+  $('supplier-code').required = !manual;
+  ['manual-manufacturer','manual-mpn','manual-description'].forEach(id => { $(id).required = manual; });
+  const features = state.settings.features, willReview = features.llm_enabled && state.settings.llm_key_saved;
+  $('lookup-button').textContent = manual ? 'Prepare for review →' : willReview ? 'Retrieve & review with LLM →' : 'Retrieve for manual review →';
+  const options = features.suppliers[$('supplier').value];
+  const supplier = state.settings.suppliers.find(s => s.key === $('supplier').value);
+  const method = manual ? 'Enter details from the manufacturer datasheet. No supplier lookup will run.' : !supplier.credential_fields.length || !options.use_api ? 'This lookup uses public product pages.' : state.settings.supplier_api_ready[supplier.key] ? `This lookup uses the supplier API${options.public_fallback ? ', with public-page fallback if unavailable' : ''}.` : options.public_fallback ? 'No complete API credentials saved. This lookup will try public product pages.' : 'Add all supplier API credentials in Settings, or enable public-page fallback.';
+  $('import-mode-note').textContent = method + (willReview ? ' LLM review uses your saved provider key.' : features.llm_enabled && !features.llm_fallback ? ' LLM review is required: add a key in Settings before importing.' : ' You will check the details yourself before saving.');
+}
+
+const setupSteps = ['GitHub connection','Suppliers','Review preferences','Finish'];
+function renderSetup() {
+  if (!state.settings) return;
+  const wizard = state.setupStep !== null, step = state.setupStep;
+  $('setup-guide').hidden = !wizard; $('setup-actions').hidden = !wizard;
+  $('settings-actions').hidden = wizard; $('start-setup').hidden = wizard;
+  $('settings-title').textContent = wizard ? 'Let’s set up your workspace' : 'Connections & settings';
+  document.querySelectorAll('[data-setup-step]').forEach(panel => {
+    const number = Number(panel.dataset.setupStep);
+    panel.hidden = wizard ? number !== step : number === 3;
+    if (panel.id === 'database-settings' && state.settings.role !== 'admin') panel.hidden = true;
+  });
+  $('initialize').parentElement.hidden = wizard;
+  $('setup-initialize').hidden = state.settings.role !== 'admin';
+  if (!wizard) return;
+  $('setup-progress').innerHTML = setupSteps.map((label, i) => `<li ${i === step ? 'aria-current="step"' : ''} class="${i === step ? 'active' : i < step ? 'complete' : ''}"><span>${i < step ? '✓' : i + 1}</span>${label}</li>`).join('');
+  $('setup-description').textContent = ['First, connect GitHub. These are the only credentials you need to get started.', 'Choose the suppliers you use. You can skip every API key and add them later.', 'Choose manual review or optional LLM help. Every import still needs your confirmation.', 'Your preferences are saved. Check your database, then add your first component.'][step];
+  $('setup-back').hidden = step === 0;
+  $('setup-next').textContent = step === 3 ? 'Finish setup →' : 'Save & continue →';
+  $('setup-next').disabled = step === 3 && !state.connectionChecked;
+  const s = state.settings, suppliers = s.suppliers.filter(v => s.features.suppliers[v.key].enabled).map(v => v.name).join(', ');
+  $('setup-summary').innerHTML = `<dl class="setup-summary"><dt>Database</dt><dd>${escapeHTML(s.repo || 'Not connected')} · ${escapeHTML(s.branch)}</dd><dt>Suppliers</dt><dd>${escapeHTML(suppliers || 'Manual entry only')}</dd><dt>Review</dt><dd>${!s.features.llm_enabled ? 'Manual review' : !s.llm_key_saved ? s.features.llm_fallback ? 'Manual review until you add an LLM key' : 'LLM required · add a key before importing' : s.features.llm_fallback ? 'LLM review with manual fallback' : 'LLM review required'}</dd></dl>`;
+}
+
+function openSetup() {
+  clearMessages(); state.setupStep = state.settings.onboarding_complete ? 0 : state.settings.onboarding_step;
+  state.connectionChecked = false; $('connection-result').textContent = '';
+  showView('settings'); renderSetup(); focusSetup();
+}
+
+function focusSetup() { $('settings-title').setAttribute('tabindex','-1'); $('settings-title').focus({preventScroll:true}); $('settings-title').scrollIntoView({block:'start'}); }
 
 async function boot() {
   try {
     state.settings = await api('settings');
     $('login-view').hidden = true; $('workspace').hidden = false; renderSettings();
-    showView(location.hash.slice(1) || 'inventory');
-    if (state.settings.client_token_saved && state.settings.repo) await loadInventory();
-    else { showView('settings'); notice('Connect your GitHub database and save your client token to get started.'); }
-    if (state.settings.mode === 'server') await loadQueue();
+    if (!state.settings.onboarding_complete) openSetup();
+    else showView(location.hash.slice(1) || 'inventory');
+    if (state.settings.client_token_saved && state.settings.repo && state.settings.onboarding_complete) await loadInventory();
+    else if (state.settings.onboarding_complete) { openSetup(); notice('Reconnect GitHub to get started.'); }
+    if (state.settings.mode === 'server' && state.settings.repo) await loadQueue();
   } catch (error) { if (state.settings) showError(error); }
 }
 
@@ -195,7 +265,11 @@ $('stock-form').addEventListener('submit', async event => {
 });
 $('import-form').addEventListener('submit', async event => {
   event.preventDefault(); clearMessages();
-  try { await busy(event.submitter, async () => { const result = await api('import', {supplier:$('supplier').value, code:$('supplier-code').value.trim(), product_url:$('product-url').value.trim()}); renderReview(result); }, 'Retrieving & reviewing…'); }
+  try { await busy(event.submitter, async () => {
+    const data = {supplier:$('supplier').value, code:$('supplier-code').value.trim(), product_url:$('product-url').value.trim()};
+    if (data.supplier === 'manual') data.manual = {manufacturer:$('manual-manufacturer').value.trim(), mpn:$('manual-mpn').value.trim(), description:$('manual-description').value.trim(), datasheet_url:$('manual-datasheet').value.trim()};
+    const result = await api('import', data); renderReview(result);
+  }, 'Preparing your review…'); }
   catch(error) { showError(error); }
 });
 $('discard-review').addEventListener('click', () => { state.draft = null; $('review-panel').hidden = true; $('review-step').classList.remove('active'); });
@@ -208,20 +282,80 @@ $('review-form').addEventListener('submit', async event => {
     state.draft = null; $('review-panel').hidden = true; $('review-step').classList.remove('active'); transactionNotice(result);
   }, 'Submitting…'); } catch(error) { showError(error); }
 });
-$('settings-form').addEventListener('submit', async event => {
-  event.preventDefault(); clearMessages(); $('settings-saved').textContent = '';
-  try { await busy(event.submitter, async () => {
-    const data = {llm:{base_url:$('llm-url').value.trim(), model:$('llm-model').value.trim()}};
-    if ($('llm-key').value) data.llm.api_key = $('llm-key').value.trim();
-    if ($('client-token').value) data.client_token = $('client-token').value.trim();
-    if (state.settings.role === 'admin') { data.repo = $('setting-repo').value.trim(); data.branch = $('setting-branch').value.trim(); data.llm_hosts = $('llm-hosts').value.split(',').map(v => v.trim()).filter(Boolean); if ($('server-token').value) data.server_token = $('server-token').value.trim(); }
+async function saveSettings(step=null, extra={}) {
+  const data = {...extra};
+  if (step === null || step === 0) {
+    if ($('client-token').value.trim()) data.client_token = $('client-token').value.trim();
+    if (state.settings.role === 'admin') {
+      data.repo = $('setting-repo').value.trim(); data.branch = $('setting-branch').value.trim();
+      data.llm_hosts = $('llm-hosts').value.split(',').map(v => v.trim()).filter(Boolean);
+      if ($('server-token').value.trim()) data.server_token = $('server-token').value.trim();
+    }
+    if (step === 0 && (!(data.repo || state.settings.repo) || !(data.client_token || state.settings.client_token_saved) || (state.settings.mode === 'server' && state.settings.role === 'admin' && !(data.server_token || state.settings.server_token_saved)))) throw new Error('Enter your repository and required GitHub tokens. Supplier and LLM keys can wait.');
+  }
+  if (step === null || step === 2) {
+    data.features = {llm_enabled:$('llm-enabled').checked, llm_fallback:$('llm-fallback').checked};
+    if (data.features.llm_enabled) {
+      data.llm = {base_url:$('llm-url').value.trim(), model:$('llm-model').value.trim()};
+      if ($('llm-key').value.trim()) data.llm.api_key = $('llm-key').value.trim();
+      if (step === 2 && !data.features.llm_fallback && !(data.llm.api_key || state.settings.llm_key_saved)) throw new Error('Add an LLM key, enable manual fallback, or turn off LLM review to continue.');
+    }
+  }
+  if (step === null || step === 1) {
+    data.features ||= {}; data.features.suppliers = {};
+    document.querySelectorAll('[data-feature-supplier]').forEach(input => { data.features.suppliers[input.dataset.featureSupplier] ||= {}; data.features.suppliers[input.dataset.featureSupplier][input.dataset.switch] = input.checked; });
     const suppliers = {};
-    document.querySelectorAll('[data-supplier]').forEach(input => { if (input.value) { suppliers[input.dataset.supplier] ||= {}; suppliers[input.dataset.supplier][input.dataset.field] = input.value.trim(); } });
+    document.querySelectorAll('[data-supplier]').forEach(input => { if (input.value.trim()) { suppliers[input.dataset.supplier] ||= {}; suppliers[input.dataset.supplier][input.dataset.field] = input.value.trim(); } });
     if (Object.keys(suppliers).length) data.suppliers = suppliers;
-    state.settings = await api('settings', data);
-    ['client-token','server-token','llm-key'].forEach(id => { $(id).value = ''; }); renderSettings(); $('settings-saved').textContent = 'Saved.';
-    notice('Connections saved. Initialize a new database, or refresh Inventory to connect.');
-  }, 'Saving…'); } catch(error) { showError(error); }
+  }
+  state.settings = await api('settings', data);
+  if (step === null || step === 0) { state.connectionChecked = false; $('connection-result').textContent = ''; }
+  ['client-token','server-token','llm-key'].forEach(id => { $(id).value = ''; });
+  renderSettings(); $('settings-saved').textContent = 'Saved.';
+}
+
+$('settings-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (state.setupStep !== null) { $('setup-next').click(); return; }
+  clearMessages(); $('settings-saved').textContent = '';
+  try { await busy(event.submitter, async () => { await saveSettings(); notice('Preferences saved.'); }, 'Saving…'); }
+  catch(error) { showError(error); }
+});
+['llm-enabled','llm-fallback'].forEach(id => $(id).addEventListener('change', renderFeatureControls));
+$('supplier-credentials').addEventListener('change', renderFeatureControls);
+$('supplier').addEventListener('change', () => { state.draft = null; $('review-panel').hidden = true; renderImportMode(); });
+$('start-setup').addEventListener('click', openSetup);
+$('setup-back').addEventListener('click', () => { clearMessages(); state.setupStep -= 1; renderSetup(); focusSetup(); });
+$('setup-later').addEventListener('click', () => { state.setupStep = null; renderSettings(); notice('Saved steps are kept. Open step-by-step setup to continue.'); });
+$('setup-next').addEventListener('click', async event => {
+  clearMessages(); const step = state.setupStep;
+  try { await busy(event.currentTarget, async () => {
+    if (step === 3) {
+      if (!state.connectionChecked) throw new Error('Check your saved GitHub connection first.');
+      await saveSettings(3, {onboarding_complete:true});
+      state.setupStep = null; renderSetup(); showView('inventory'); await loadInventory();
+      notice('Your workspace is ready. Add your first component, or adjust stock on an existing part.');
+    } else {
+      await saveSettings(step, {onboarding_step:step + 1});
+      state.setupStep = step + 1; renderSetup(); focusSetup();
+    }
+  }, 'Saving…'); }
+  catch(error) { showError(error); }
+  finally { renderSetup(); }
+});
+$('check-connection').addEventListener('click', async event => {
+  clearMessages(); state.connectionChecked = false;
+  try { await busy(event.currentTarget, async () => {
+    const result = await api('connection', {}); state.connectionChecked = true;
+    $('connection-result').textContent = `Connected to ${state.settings.repo}. ${result.components} component types · revision ${result.revision}.`;
+  }, 'Checking…'); }
+  catch(error) { $('connection-result').textContent = ''; showError(error); }
+  finally { renderSetup(); }
+});
+$('setup-initialize').addEventListener('click', async event => {
+  clearMessages();
+  try { await busy(event.currentTarget, async () => { await api('initialize', {}); $('connection-result').textContent = 'Database ready. Check the connection to continue.'; state.connectionChecked = false; renderSetup(); }, 'Initializing…'); }
+  catch(error) { showError(error); }
 });
 $('initialize').addEventListener('click', async event => { clearMessages(); try { await busy(event.currentTarget, async () => { const result = await api('initialize',{}); notice(result.created ? 'Database initialized. You can now import components.' : 'The inventory database already exists.'); if (state.settings.client_token_saved) await loadInventory(); }, 'Initializing…'); } catch(error) { showError(error); } });
 $('retry-outbox').addEventListener('click', async event => { clearMessages(); try { await busy(event.currentTarget, async () => { await api('flush',{}); await loadRequests(); if (state.settings.client_token_saved) await loadInventory(); }, 'Synchronizing…'); } catch(error) { showError(error); } });

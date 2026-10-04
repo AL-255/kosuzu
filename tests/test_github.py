@@ -1,4 +1,6 @@
 import unittest
+import base64
+import json
 from kosuzu.http import RemoteError
 from kosuzu.model import ValidationError, new_event
 from tests.helpers import FakeGitHub, part
@@ -15,6 +17,40 @@ class GitHubTests(unittest.TestCase):
     def test_initialize_is_safe_and_repeatable(self):
         api=FakeGitHub(False); gh=api.factory("token","test/library")
         self.assertTrue(gh.initialize()); self.assertFalse(gh.initialize()); self.assertEqual(gh.inventory()["revision"],0)
+
+    def empty_repository(self, race=False):
+        api=FakeGitHub(); api.refs.clear()
+        original=api.route
+        def route(method,path,query,data):
+            if method=="GET" and not path: return {"default_branch":"main"}
+            if method=="GET" and path.startswith("git/ref/") and not api.refs: raise RemoteError("Repository empty",409)
+            if method=="PUT" and path=="contents/inventory.json":
+                self.assertNotIn("sha",data)
+                self.assertEqual(data["branch"],"main")
+                inventory=json.loads(base64.b64decode(data["content"]))
+                tree=api.new_tree({"inventory.json":json.dumps(inventory)})
+                api.refs["main"]=api.new_commit(tree,[])
+                if race: raise RemoteError("Concurrent initializer",422)
+                return {"commit":{"sha":api.refs["main"]}}
+            return original(method,path,query,data)
+        api.route=route
+        return api
+
+    def test_empty_repository_initialization_creates_first_commit_once(self):
+        api=self.empty_repository(); gh=api.factory("token","test/library")
+        self.assertTrue(gh.initialize()); self.assertFalse(gh.initialize())
+        self.assertEqual(gh.inventory()["revision"],0)
+        self.assertEqual(len([c for c in api.calls if c[0]=="PUT"]),1)
+
+    def test_empty_repository_initialization_race_verifies_winner(self):
+        api=self.empty_repository(race=True); gh=api.factory("token","test/library")
+        self.assertFalse(gh.initialize()); self.assertEqual(gh.inventory()["revision"],0)
+
+    def test_empty_repository_wrong_branch_does_not_write(self):
+        api=self.empty_repository(); gh=api.factory("token","test/library","other")
+        with self.assertRaisesRegex(ValidationError,"default branch"):
+            gh.initialize()
+        self.assertFalse(any(c[0]=="PUT" for c in api.calls))
 
     def test_retried_submission_reuses_branch_and_pr(self):
         e=new_event("create",self.part["id"],3,self.part)

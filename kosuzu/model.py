@@ -44,7 +44,7 @@ def component(value):
     result["attributes"] = {text(k, "attribute", 100, True): text(v, "attribute value", 500) for k, v in attrs.items()}
     review = value.get("review", {})
     if not isinstance(review, dict) or set(review) != {"model", "checked_at", "warnings", "confirmed"} or review.get("confirmed") is not True:
-        raise ValidationError("A completed LLM review and human confirmation are required")
+        raise ValidationError("A completed review and human confirmation are required")
     if not isinstance(review["warnings"], list) or len(review["warnings"]) > 50:
         raise ValidationError("Invalid review warnings")
     result["review"] = {"model": text(review["model"], "model", 100, True), "checked_at": text(review["checked_at"], "checked_at", 100, True), "warnings": [text(w, "warning", 1000) for w in review["warnings"]], "confirmed": True}

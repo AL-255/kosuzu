@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from urllib.request import urlopen, Request
 from urllib.error import HTTPError
+from kosuzu import __version__
 
 
 def smoke(executable, mode):
@@ -19,7 +20,7 @@ def smoke(executable, mode):
         try:
             url=None
             for _ in range(100):
-                match=re.search(rf"Kosuzu 0\.1\.0 {mode}: (http://[^\s]+)",log.read_text())
+                match=re.search(rf"Kosuzu {re.escape(__version__)} {mode}: (http://[^\s]+)",log.read_text())
                 if match: url=match[1]; break
                 if process.poll() is not None: raise RuntimeError("Frozen server exited before startup")
                 time.sleep(.2)
@@ -57,7 +58,7 @@ def smoke(executable, mode):
 
 def main():
     executable=str(Path(sys.argv[1]).resolve())
-    assert subprocess.check_output([executable,"--version"],text=True).strip()=="0.1.0"
+    assert subprocess.check_output([executable,"--version"],text=True).strip()==__version__
     for mode in ("server", "client"):
         smoke(executable, mode)
 
