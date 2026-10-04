@@ -18,7 +18,7 @@ class QuietHandler(SimpleHTTPRequestHandler):
 
 def run(browser_type, mobile=False):
     with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory) / "kosusu-test"; root.mkdir()
+        root = Path(directory) / "kosuzu-test"; root.mkdir()
         inventory = empty_inventory()
         box = {"id": "a" * 32, "name": "BOXA", "description": "Workbench passives", "image_url": ""}
         inventory = apply_event(inventory, new_box_event(box))
@@ -29,7 +29,7 @@ def run(browser_type, mobile=False):
         for i in range(45):
             extra = part(f"X-{i:03d}")
             inventory = apply_event(inventory, new_event("create", extra["id"], 1, extra))
-        for name, content in files(inventory, "AL-255/kosusu-test", "main").items():
+        for name, content in files(inventory, "AL-255/kosuzu-test", "main").items():
             (root / name).write_text(content, encoding="utf-8")
         handler = functools.partial(QuietHandler, directory=directory)
         server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -40,7 +40,7 @@ def run(browser_type, mobile=False):
         page.on("pageerror", lambda error: errors.append(str(error)))
         page.on("request", lambda request: requests.append(request.url))
         try:
-            page.goto(f"http://127.0.0.1:{server.server_port}/kosusu-test/")
+            page.goto(f"http://127.0.0.1:{server.server_port}/kosuzu-test/")
             expect(page.locator("#count")).to_have_text("47 components found")
             expect(page.locator(".part")).to_have_count(40)
             page.locator("#more").click(); expect(page.locator(".part")).to_have_count(47)
