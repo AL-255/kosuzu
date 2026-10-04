@@ -1,9 +1,11 @@
-# Kosuzu v0.1.1
+# Kosuzu v0.2.0
 
-Guided onboarding now saves progress across reloads and walks through GitHub, suppliers, review preferences, and a final connection check. Supplier and LLM credentials are optional. Initialize database can create the first commit in an empty GitHub repository.
+Boxes now have unique names, pictures via HTTPS URLs, and descriptions. A part can hold separate quantities in several boxes, shown together in Inventory. Box cards show contents and totals, and Inventory can search/filter by box.
 
-Enable or disable each supplier, choose public pages or API access, and control public-page fallback. Turn LLM review off to check details yourself, or enable manual fallback when the key is missing or the provider fails. Manual component entry works without supplier credentials. Every import still requires a saved review draft and explicit human confirmation, and fallback warnings identify what was checked.
+Stock additions and removals require a box choice when a part has several placements. Transfers move stock between boxes without changing totals. The server checks each selected box's availability, keeps retries idempotent, and rejects stale box edits. Box creation and edits use the existing GitHub request/outbox/error queue flow.
 
-Windows, Linux, Intel/Apple Silicon macOS archives, a Python wheel, and source packages are included. Install the update and restart the program; existing inventory and saved credentials are retained. The guide opens on first sign-in after this update and can be reopened from Settings. No database migration is required.
+Adafruit joins DigiKey, Arrow, LCSC and Mouser. Enter a numeric product ID such as 3406 or PID 3406. Its public page supplies metadata, imagery and LLM/manual review evidence without a supplier key. Missing manufacturer/MPN fields use a labeled catalog identity with an explicit review warning.
 
-See `docs/setup.md` for GitHub permissions and HTTPS deployment. iOS uses Safari Add to Home Screen. Desktop executables open a local browser UI. macOS binaries are unsigned. Supplier public pages may block lookups; manual entry remains available. Credentials are local plaintext protected by filesystem permissions. v0.1 targets snapshots below 1 MB and trusted collaborators.
+**Upgrade the server and all clients together.** Existing schema 1 stock appears in Unboxed; the first applied transaction upgrades the snapshot to schema 2 while preserving counts, receipts and location notes. v0.1 programs cannot read schema 2. Pending old requests remain readable; ambiguous stock changes need replacement requests with a box choice. Back up inventory/server state before upgrading. See `docs/setup.md`.
+
+Windows, Linux, Intel/Apple Silicon macOS archives, Python wheel and source packages are included. iOS uses Safari Add to Home Screen; desktop executables open a browser UI. macOS binaries are unsigned. Credentials remain local plaintext protected by filesystem permissions. Public supplier pages can block lookups; manual entry remains available. Snapshots should stay below 1 MB with trusted repository collaborators.

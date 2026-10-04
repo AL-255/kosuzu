@@ -12,7 +12,15 @@ It reads current base SHA, applies the reducer, constructs the event/snapshot tr
 
 A competing write rejects the stale ref update. The server rereads and revalidates stock, up to four attempts. Receipts map IDs to canonical SHA-256 payload hashes: same payload is a no-op; changed content under an old ID fails. Crash/retry after a successful update cannot repeat a delta. Cross-process safety comes from Git history rather than the local lock.
 
-Snapshot and event change atomically. Ordering follows successful commits rather than client clocks. History/events form the audit trail. Manual snapshot changes or manual PR merges bypass these invariants; v0.1 trusts repository collaborators.
+Snapshot and event change atomically. Ordering follows successful commits rather than client clocks. History/events form the audit trail. Manual snapshot changes or manual PR merges bypass these invariants; v0.2 trusts repository collaborators.
+
+## Boxes and schema compatibility
+
+Snapshot schema 2 adds a `boxes` dictionary (UUID → name, description, HTTPS image URL) and `boxes` allocations on every component stock row. Allocation counts are nonnegative integers summing to the existing total `quantity`. The empty string means Unboxed. Named box identities stay stable across edits; names must be unique.
+
+Schema 2 events add `box_create`, `box_update`, and `transfer`, as well as optional `box_id` on stock creation/adjustment. Box edits carry the canonical hash of the previous box record for optimistic conflict detection. Transfers debit a specific source and credit a specific destination atomically without changing total stock. A stock request missing a box choice is valid only for a single placement. The client service pins that placement when preparing an adjustment; a later move cannot silently change the requested source. The server rechecks box existence and availability after every ref race.
+
+Schema 1 snapshots are copied into schema 2 in memory with all stock assigned to Unboxed. Old event payloads retain their canonical representation so existing receipt hashes still match. The first successfully applied event commits the upgraded snapshot alongside its event. Old clients must be upgraded before that write. Cached schema 1 snapshots also normalize on read.
 
 ## Credentials and HTTP
 
@@ -36,6 +44,6 @@ Use `@register` from `kosuzu.suppliers` and import your module at startup. Setti
 
 ## Verification
 
-Unit/HTTP tests cover reducer invariants, REST Git DAG races, retries, all suppliers, LLM output, persistent queues/outboxes, roles, credentials, auth/CSRF, and assets. `python -m tests.browser_smoke` exercises resumed guided setup, feature switches, connection failures, manual and LLM import/review/submission, stock changes, oversell handling, rejection, and responsive layout in Chromium/iPhone-sized WebKit using deterministic external-service fixtures. These tests are not live paid-provider certification.
+Unit/HTTP tests cover reducer invariants, REST Git DAG races, retries, all suppliers, LLM output, persistent queues/outboxes, roles, credentials, auth/CSRF, and assets. `python -m tests.browser_smoke` exercises resumed guided setup, feature switches, connection failures, manual and LLM import/review/submission, box creation/edit/placement/filter/transfer, multi-box choice, Adafruit imports, stock changes, box-specific oversell handling, rejection, and responsive layout in Chromium/iPhone-sized WebKit using deterministic external-service fixtures. These tests are not live paid-provider certification.
 
 `scripts/live_github_smoke.py` optionally runs real GitHub operations in a scratch branch and cleans up temporary branches. `scripts/package_smoke.py` launches built executables to verify startup/health/bundled assets. Tag CI tests, builds wheel/source/platform distributions, and publishes a release with checksums.

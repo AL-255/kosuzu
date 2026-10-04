@@ -258,6 +258,40 @@ class LCSC(WebSupplier):
         return f"https://www.lcsc.com/product-detail/{code.upper()}.html"
 
 
+@register
+class Adafruit(WebSupplier):
+    key, name = "adafruit", "Adafruit"
+    domains = {"www.adafruit.com", "adafruit.com"}
+
+    def lookup(self, code, credentials, transport, product_url=""):
+        match = re.fullmatch(r"(?:PID[ -]?)?#?([1-9][0-9]{0,7})", code, re.I)
+        if not match:
+            raise ValidationError("Adafruit codes must be a numeric product ID, such as 3406 or PID 3406")
+        ident = match[1]
+        html, final = public_page(product_url or f"https://www.adafruit.com/product/{ident}", self.domains)
+        page = ProductPage(); page.feed(html)
+        products = [p for p in page.products() if str(p.get("sku", p.get("productID", ""))) == ident]
+        if len(products) != 1:
+            raise ValidationError("Adafruit found no unique exact product ID; check the code and product URL")
+        p = products[0]
+        brand = p.get("manufacturer") or p.get("brand")
+        if isinstance(brand, dict): brand = brand.get("name")
+        mpn = p.get("mpn")
+        attrs = {a["name"]: str(a.get("value", "")) for a in p.get("additionalProperty", []) if a.get("name")}
+        attrs["Adafruit product ID"] = ident
+        if not brand or not mpn:
+            attrs["Identity basis"] = "Adafruit does not list a complete manufacturer/MPN identity. Catalog identity is used; verify manufacturer and MPN against the product documentation."
+        image = p.get("image") or page.meta.get("og:image", "")
+        if isinstance(image, list): image = image[0] if image else ""
+        if isinstance(image, dict): image = image.get("url", "")
+        description = p.get("description") or p.get("name") or page.meta.get("og:title", "")
+        # Product descriptions can contain a whole guide; keep the candidate
+        # bounded, while the visible page supplies separate review evidence.
+        clean = ProductPage(); clean.feed(str(description))
+        description = " ".join(clean.lines)[:2000] or str(p.get("name", ""))[:2000]
+        return draft(self.key, ident, str(brand or "Adafruit (catalog)"), str(mpn or "ADA-" + ident), description, final, image_url=urljoin(final, image) if image else "", category=str(p.get("category", "")), attributes=attrs), "\n".join(page.lines)[:16000]
+
+
 def lookup(supplier, code, credentials=None, transport=None, product_url=""):
     if supplier not in REGISTRY:
         raise ValidationError("Unknown supplier")

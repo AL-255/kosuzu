@@ -6,7 +6,7 @@ import uuid
 import time
 from kosuzu.github import GitHub
 from kosuzu.http import RemoteError
-from kosuzu.model import ValidationError, new_event
+from kosuzu.model import ValidationError, new_event, new_transfer, new_box_event
 from tests.helpers import part
 
 
@@ -22,6 +22,7 @@ def main():
         if exc.status!=409: raise
         base.initialize()
         print("Initialized the empty test repository with an empty inventory snapshot")
+    default_head=base.head()
     branch="integration/kosuzu-"+uuid.uuid4().hex
     gh=GitHub(token,args.repo,branch)
     events=[]; numbers=[]; branch_created=False
@@ -54,7 +55,27 @@ def main():
         assert gh.submit(events[2])["status"]=="blocked"
         assert gh.submit(events[1])["status"]=="applied"
         gh.reject(removals[1]["number"])
-        print(f"PASS real GitHub: initialization, manual-reviewed component, exact proposal, auto-recognized merge, concurrent removal conflict, idempotent retry, client error status. PRs: {numbers}")
+        def apply(event):
+            events.append(event); result=gh.submit(event); numbers.append(result["number"])
+            gh.merge(result["number"])
+            return result
+        a={"id":uuid.uuid4().hex,"name":"SMOKE BOXA","description":"Temporary test box","image_url":"https://example.com/box.jpg"}
+        b={**a,"id":uuid.uuid4().hex,"name":"SMOKE BOXB"}
+        apply(new_box_event(a)); apply(new_box_event(b))
+        apply(new_transfer(p["id"],3,"",a["id"]))
+        apply(new_event("adjust",p["id"],20,box_id=b["id"]))
+        unqualified=new_event("adjust",p["id"],1); events.append(unqualified)
+        result=gh.submit(unqualified); numbers.append(result["number"])
+        try: gh.merge(result["number"])
+        except ValidationError as exc: assert "multiple boxes" in str(exc)
+        else: raise AssertionError("Ambiguous multi-box adjustment merged")
+        gh.reject(result["number"])
+        apply(new_transfer(p["id"],1,a["id"],b["id"]))
+        apply(new_box_event({**b,"description":"Reviewed box edit"},b))
+        row=gh.inventory()["components"][p["id"]]
+        assert row["quantity"]==23 and row["boxes"]=={a["id"]:2,b["id"]:21}
+        assert base.head()==default_head,"Repository default branch changed during scratch test"
+        print(f"PASS real GitHub: initialization, manual review, atomic merge, concurrent removal conflict, idempotent retry, client status, boxes/edit/transfers, and mandatory multi-box selection. PRs: {numbers}")
     finally:
         failures=[]
         for number in numbers:

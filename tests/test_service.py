@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import unittest
+import uuid
 from unittest.mock import patch
 from kosuzu.model import ValidationError, new_event
 from kosuzu.http import RemoteError
@@ -181,6 +182,55 @@ class ServiceTests(unittest.TestCase):
         user=self.service.session(self.service.login(self.store.setting("client_key")))
         with self.assertRaisesRegex(ValidationError,"GitHub tokens"): self.service.save_settings(user,{"onboarding_complete":True})
         self.assertFalse(self.service.public_settings(user)["onboarding_complete"])
+
+    def test_box_requests_transfers_and_ambiguous_changes_full_lifecycle(self):
+        p=self.seed(); a=uuid.uuid4().hex; b=uuid.uuid4().hex
+        for ident,name in ((a,"BOXA"),(b,"BOXB")):
+            data={"request_id":uuid.uuid4().hex,"box_id":ident,"name":name,"description":"Test box","image_url":"https://example.com/box.jpg"}
+            first=self.service.save_box(self.client,data); retry=self.service.save_box(self.client,data)
+            self.assertEqual(first["event_id"],retry["event_id"])
+        self.service.sync()
+        for ident,quantity in ((a,10),(b,20)):
+            data={"request_id":uuid.uuid4().hex,"component_id":p["id"],"quantity":quantity,"from_box":"","to_box":ident}
+            self.service.transfer(self.client,data); self.service.transfer(self.client,data)
+        self.service.sync()
+        row=self.service.inventory(self.client)["inventory"]["components"][p["id"]]
+        self.assertEqual(row["boxes"],{"":20,a:10,b:20})
+        with self.assertRaisesRegex(ValidationError,"multiple boxes"):
+            self.service.adjust(self.client,{"request_id":uuid.uuid4().hex,"component_id":p["id"],"delta":-1})
+        data={"request_id":uuid.uuid4().hex,"component_id":p["id"],"delta":-11,"box_id":a}
+        self.service.adjust(self.client,data); self.service.sync()
+        self.assertIn("BOXA: available 10",str(self.store.errors("test/library")))
+        self.assertEqual(self.service.inventory(self.client)["inventory"]["components"][p["id"]]["quantity"],50)
+        with self.assertRaisesRegex(ValidationError,"different content"):
+            self.service.adjust(self.client,{**data,"box_id":b})
+
+    def test_adafruit_catalog_identity_warning_survives_manual_review(self):
+        candidate=part(); candidate["attributes"]["Identity basis"]="Catalog identity used; verify manufacturer"
+        with patch("kosuzu.service.lookup",return_value=(candidate,"evidence")):
+            result=self.service.import_part(self.client,{"supplier":"adafruit","code":"3406"})
+        self.assertIn("Catalog identity",str(result["component"]["review"]["warnings"]))
+
+    def test_single_box_choice_is_pinned_when_another_server_moves_stock(self):
+        p=self.seed(); ident=uuid.uuid4().hex
+        self.service.save_box(self.client,{"request_id":uuid.uuid4().hex,"box_id":ident,"name":"BOXA"})
+        self.service.sync()
+        self.service.adjust(self.client,{"request_id":uuid.uuid4().hex,"component_id":p["id"],"delta":-30})
+        moved=self.service.transfer(self.client,{"request_id":uuid.uuid4().hex,"component_id":p["id"],"quantity":50,"from_box":"","to_box":ident})
+        self.service.github().merge(moved["number"])
+        self.service.sync()
+        row=self.service.inventory(self.client)["inventory"]["components"][p["id"]]
+        self.assertEqual(row["boxes"],{ident:50})
+        self.assertIn("Unboxed: available 0",str(self.store.errors("test/library")))
+
+    def test_offline_legacy_cache_has_unboxed_allocations(self):
+        p=part()
+        legacy={"schema":1,"revision":0,"components":{p["id"]:{"component":p,"quantity":50}},"receipts":{}}
+        self.store.set_setting("cache:test/library:main",{"inventory":legacy,"time":1})
+        self.api.offline=True
+        result=self.service.inventory(self.client)
+        self.assertTrue(result["stale"])
+        self.assertEqual(result["inventory"]["components"][p["id"]]["boxes"],{"":50})
 
     def seed(self):
         p=part(); gh=self.service.github(self.admin["id"]); pr=gh.submit(new_event("create",p["id"],50,p)); self.service.sync(); return p

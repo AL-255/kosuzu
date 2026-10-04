@@ -1,8 +1,14 @@
 'use strict';
 const $ = id => document.getElementById(id);
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const state = {settings:null, inventory:null, draft:null, currentView:'inventory', stockId:null, stockRequest:null, loading:false, queue:[], setupStep:null, connectionChecked:false};
-const names = {inventory:'Inventory', import:'New component', requests:'My requests', queue:'Error queue', settings:'Settings'};
+const state = {settings:null, inventory:null, draft:null, currentView:'inventory', stockId:null, stockRequest:null, loading:false, queue:[], setupStep:null, connectionChecked:false, boxDraft:null, boxRequest:null};
+const names = {inventory:'Inventory', boxes:'Boxes', import:'New component', requests:'My requests', queue:'Error queue', settings:'Settings'};
+const UNBOXED = '__unboxed__';
+const boxName = id => id ? state.inventory?.boxes[id]?.name || 'Unknown box' : 'Unboxed';
+const encodeBox = id => id || UNBOXED;
+const decodeBox = id => id === UNBOXED ? '' : id;
+function boxOptions(ids, counts=null) { return ids.map(id => `<option value="${escapeHTML(encodeBox(id))}">${escapeHTML(boxName(id))}${counts ? ` · ${number(counts[id] || 0)} pieces` : ''}</option>`).join(''); }
+function allBoxIds() { return ['', ...Object.keys(state.inventory?.boxes || {}).sort((a,b) => boxName(a).localeCompare(boxName(b)))]; }
 
 async function api(path, body) {
   const options = {headers:{'X-Kosuzu':'1'}, credentials:'same-origin'};
@@ -48,6 +54,7 @@ function showView(view) {
   if (location.hash !== '#' + view) history.replaceState(null, '', '#' + view);
   if (view === 'requests') loadRequests().catch(showError);
   if (view === 'queue') loadQueue().catch(showError);
+  if (view === 'boxes' && !state.inventory && state.settings?.client_token_saved) loadInventory().catch(showError);
 }
 
 function renderSettings() {
@@ -74,7 +81,7 @@ function renderSettings() {
   $('supplier').value = enabled.some(v => v.key === selected) || selected === 'manual' ? selected : enabled.some(v => v.key === 'lcsc') ? 'lcsc' : enabled[0]?.key || 'manual';
   $('supplier-credentials').innerHTML = s.suppliers.map(supplier => {
     const key = escapeHTML(supplier.key), options = s.features.suppliers[supplier.key];
-    return `<div class="supplier-box" data-supplier-box="${key}"><label class="feature-switch"><input type="checkbox" role="switch" data-feature-supplier="${key}" data-switch="enabled" ${options.enabled ? 'checked' : ''}><span>${escapeHTML(supplier.name)}<small>${supplier.credential_fields.length ? s.supplier_api_ready[supplier.key] ? 'API credentials saved' : 'Can try public pages · API credentials optional' : 'Public product pages · no API key needed'}</small></span></label><div data-supplier-options ${options.enabled ? '' : 'hidden'}>${supplier.credential_fields.length ? `<label class="feature-switch"><input type="checkbox" role="switch" data-feature-supplier="${key}" data-switch="use_api" ${options.use_api ? 'checked' : ''}><span>Use supplier API when configured<small>Turn off to use public pages only.</small></span></label><label class="feature-switch" data-fallback-label ${options.use_api ? '' : 'hidden'}><input type="checkbox" role="switch" data-feature-supplier="${key}" data-switch="public_fallback" ${options.public_fallback ? 'checked' : ''}><span>Allow public-page fallback<small>Try public pages if API credentials are missing or the API is unavailable.</small></span></label><details data-api-fields ${options.use_api ? '' : 'hidden'}><summary>Add or update API credentials (optional)</summary><div class="form-grid">${supplier.credential_fields.map(field => `<label>${escapeHTML(field.replaceAll('_',' '))}<input type="password" autocomplete="new-password" data-supplier="${key}" data-field="${escapeHTML(field)}" placeholder="Blank keeps saved credentials"></label>`).join('')}</div></details>` : '<p class="small">Use the C-code printed on your bag, such as C25804.</p>'}</div></div>`;
+    return `<div class="supplier-box" data-supplier-box="${key}"><label class="feature-switch"><input type="checkbox" role="switch" data-feature-supplier="${key}" data-switch="enabled" ${options.enabled ? 'checked' : ''}><span>${escapeHTML(supplier.name)}<small>${supplier.credential_fields.length ? s.supplier_api_ready[supplier.key] ? 'API credentials saved' : 'Can try public pages · API credentials optional' : 'Public product pages · no API key needed'}</small></span></label><div data-supplier-options ${options.enabled ? '' : 'hidden'}>${supplier.credential_fields.length ? `<label class="feature-switch"><input type="checkbox" role="switch" data-feature-supplier="${key}" data-switch="use_api" ${options.use_api ? 'checked' : ''}><span>Use supplier API when configured<small>Turn off to use public pages only.</small></span></label><label class="feature-switch" data-fallback-label ${options.use_api ? '' : 'hidden'}><input type="checkbox" role="switch" data-feature-supplier="${key}" data-switch="public_fallback" ${options.public_fallback ? 'checked' : ''}><span>Allow public-page fallback<small>Try public pages if API credentials are missing or the API is unavailable.</small></span></label><details data-api-fields ${options.use_api ? '' : 'hidden'}><summary>Add or update API credentials (optional)</summary><div class="form-grid">${supplier.credential_fields.map(field => `<label>${escapeHTML(field.replaceAll('_',' '))}<input type="password" autocomplete="new-password" data-supplier="${key}" data-field="${escapeHTML(field)}" placeholder="Blank keeps saved credentials"></label>`).join('')}</div></details>` : `<p class="small">${supplier.key === 'lcsc' ? 'Use the C-code printed on your bag, such as C25804.' : 'Use the numeric product ID, such as 3406.'}</p>`}</div></div>`;
   }).join('');
   $('shared-database').hidden = s.role === 'admin';
   $('shared-database').textContent = s.repo ? `Your workspace uses ${s.repo} (${s.branch}). The administrator manages this connection.` : 'Your administrator needs to connect the workspace repository before you can continue.';
@@ -157,7 +164,7 @@ async function loadInventory() {
   state.inventory = result.inventory;
   $('offline-label').hidden = !result.stale;
   if (result.stale) notice(`Showing cached inventory from ${new Date(result.time * 1000).toLocaleString()}. ${result.warning}`);
-  renderInventory();
+  renderInventory(); renderBoxes();
 }
 
 function renderInventory() {
@@ -172,13 +179,19 @@ function renderInventory() {
   $('category-filter').innerHTML = '<option value="">All categories</option>' + categories.map(c => `<option value="${escapeHTML(c)}">${escapeHTML(c)}</option>`).join('');
   $('category-filter').value = categories.includes(selectedCategory) ? selectedCategory : '';
   const query = $('search').value.trim().toLowerCase();
+  const selectedBox = $('box-filter').value;
+  $('box-filter').innerHTML = '<option value="">All boxes</option>' + boxOptions(allBoxIds());
+  $('box-filter').value = selectedBox;
+  const boxFilter = $('box-filter').value;
   const rows = all.filter(row => {
     const c = row.component;
-    return (!query || [c.mpn,c.manufacturer,c.description,c.location,c.supplier_code,c.category,c.package,...Object.values(c.attributes)].join(' ').toLowerCase().includes(query)) && (!$('category-filter').value || c.category === $('category-filter').value) && (!$('low-filter').checked || row.quantity < 10);
+    return (!query || [c.mpn,c.manufacturer,c.description,c.location,c.supplier_code,c.category,c.package,...Object.values(c.attributes),...Object.keys(row.boxes).map(boxName)].join(' ').toLowerCase().includes(query)) && (!boxFilter || Object.hasOwn(row.boxes, decodeBox(boxFilter))) && (!$('category-filter').value || c.category === $('category-filter').value) && (!$('low-filter').checked || row.quantity < 10);
   }).sort((a,b) => a.component.mpn.localeCompare(b.component.mpn));
   $('inventory-rows').innerHTML = rows.map(row => {
     const c = row.component, image = httpsLink(c.image_url);
-    return `<tr><td><div class="component-cell">${image ? `<img class="part-img" src="${escapeHTML(image)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : '<span class="part-img part-placeholder" aria-hidden="true">▧</span>'}<div><strong>${escapeHTML(c.mpn)}</strong><small>${escapeHTML(c.manufacturer)}</small><small>${escapeHTML(c.description)}</small><span class="cell-secondary">${escapeHTML(c.supplier)} · ${escapeHTML(c.supplier_code)}</span></div></div></td><td>${escapeHTML(c.package || '—')}<div class="cell-secondary">${escapeHTML(c.category || 'Uncategorized')}</div></td><td>${escapeHTML(c.location || 'Unassigned')}</td><td><span class="stock-count ${row.quantity < 10 ? 'stock-low' : ''}">${number(row.quantity)}</span><div class="cell-secondary">pieces</div></td><td><button class="secondary" data-adjust="${escapeHTML(c.id)}">Adjust stock</button></td></tr>`;
+    const placements = Object.entries(row.boxes).map(([id,count]) => `<span class="box-allocation">${escapeHTML(boxName(id))}: ${number(count)}</span>`).join('');
+    const count = boxFilter ? row.boxes[decodeBox(boxFilter)] : row.quantity;
+    return `<tr><td><div class="component-cell">${image ? `<img class="part-img" src="${escapeHTML(image)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : '<span class="part-img part-placeholder" aria-hidden="true">▧</span>'}<div><strong>${escapeHTML(c.mpn)}</strong><small>${escapeHTML(c.manufacturer)}</small><small>${escapeHTML(c.description)}</small><span class="cell-secondary">${escapeHTML(c.supplier)} · ${escapeHTML(c.supplier_code)}</span></div></div></td><td>${escapeHTML(c.package || '—')}<div class="cell-secondary">${escapeHTML(c.category || 'Uncategorized')}</div></td><td><div class="box-allocations">${placements}</div>${c.location ? `<div class="cell-secondary">${escapeHTML(c.location)}</div>` : ''}</td><td><span class="stock-count ${count < 10 ? 'stock-low' : ''}">${number(count)}</span><div class="cell-secondary">${boxFilter ? `in this box · ${number(row.quantity)} total` : 'pieces'}</div></td><td><button class="secondary" data-adjust="${escapeHTML(c.id)}">Adjust stock</button></td></tr>`;
   }).join('');
   $('inventory-empty').hidden = rows.length > 0;
   if (!rows.length && all.length) { $('inventory-empty').querySelector('h3').textContent = 'No matching components'; $('inventory-empty').querySelector('p').textContent = 'Try another search or clear the filters.'; $('empty-settings').hidden = true; }
@@ -186,12 +199,46 @@ function renderInventory() {
   $('result-count').textContent = `${number(rows.length)} of ${number(all.length)} components`;
 }
 
+function renderBoxes() {
+  if (!state.inventory) return;
+  $('box-list').innerHTML = allBoxIds().map(id => {
+    const b = id ? state.inventory.boxes[id] : {name:'Unboxed',description:'Stock without a box assignment. Move it into a named box when you are ready.'};
+    const rows = Object.values(state.inventory.components).filter(row => Object.hasOwn(row.boxes,id));
+    const quantity = rows.reduce((sum,row) => sum + row.boxes[id],0), image = httpsLink(b.image_url);
+    return `<article class="box-card">${image ? `<img src="${escapeHTML(image)}" alt="${escapeHTML(b.name)}" referrerpolicy="no-referrer" loading="lazy">` : '<div class="box-picture" aria-hidden="true">▣</div>'}<div><h2>${escapeHTML(b.name)}</h2><p>${escapeHTML(b.description)}</p><p class="small">${number(rows.length)} component types · ${number(quantity)} pieces</p><div class="actions"><button class="secondary" data-box-contents="${escapeHTML(encodeBox(id))}">View contents</button>${id ? `<button class="text-button" data-edit-box="${escapeHTML(id)}">Edit box</button>` : ''}</div></div></article>`;
+  }).join('');
+}
+
+function openBox(id=null) {
+  state.boxDraft = id ? {...state.inventory.boxes[id]} : {id:crypto.randomUUID().replaceAll('-',''),name:'',image_url:'',description:''};
+  state.boxRequest = null; state.boxOriginal = id ? {...state.boxDraft} : null;
+  $('box-dialog-title').textContent = id ? 'Edit box' : 'New box';
+  ['name','image','description'].forEach(field => { $('box-' + field).value = state.boxDraft[field === 'image' ? 'image_url' : field]; });
+  $('box-error').textContent = ''; $('box-dialog').showModal();
+}
+
+function renderStockBoxes(reset=false) {
+  const row = state.inventory.components[state.stockId], action = $('stock-action').value;
+  const previous = reset ? '' : $('stock-box').value;
+  const ids = action === 'add' ? allBoxIds() : Object.keys(row.boxes);
+  $('stock-box').innerHTML = '<option value="">Choose a box…</option>' + boxOptions(ids,row.boxes);
+  $('stock-box').value = ids.some(id => encodeBox(id) === previous) ? previous : Object.keys(row.boxes).length === 1 ? encodeBox(Object.keys(row.boxes)[0]) : '';
+  $('stock-box-prompt').hidden = Object.keys(row.boxes).length < 2;
+  $('stock-box-prompt').textContent = 'This part belongs to multiple boxes. Choose which box you are putting parts into or taking them from.';
+  $('stock-box-label').textContent = action === 'transfer' ? 'Source box' : action === 'remove' ? 'Take from box' : 'Put into box';
+  $('stock-to-label').hidden = action !== 'transfer'; $('stock-to-box').required = action === 'transfer';
+  const target = reset ? '' : $('stock-to-box').value;
+  $('stock-to-box').innerHTML = '<option value="">Choose a destination…</option>' + boxOptions(allBoxIds(),row.boxes);
+  $('stock-to-box').value = target;
+}
+
 function openStock(ident) {
   const row = state.inventory.components[ident];
   state.stockId = ident; state.stockRequest = null;
   $('stock-part').textContent = `${row.component.manufacturer} · ${row.component.mpn}`;
-  $('stock-current').textContent = `Currently ${number(row.quantity)} pieces · ${row.component.location || 'No location assigned'}`;
+  $('stock-current').textContent = `${number(row.quantity)} pieces total · ${Object.entries(row.boxes).map(([id,count]) => boxName(id) + ': ' + number(count)).join(' · ')}`;
   $('stock-error').textContent = ''; $('stock-action').value = 'add'; $('stock-quantity').value = '1'; $('stock-note').value = '';
+  renderStockBoxes(true);
   $('stock-dialog').showModal();
 }
 
@@ -208,6 +255,7 @@ function renderReview(result) {
   for (const field of ['manufacturer','mpn','description','category','package','location']) $('part-' + field).value = c[field];
   $('part-attributes').value = JSON.stringify(c.attributes, null, 2);
   $('part-confirmed').checked = false; $('part-note').value = ''; $('part-quantity').value = 1;
+  $('part-box').innerHTML = boxOptions(allBoxIds()); $('part-box').value = $('box-filter').value || UNBOXED;
   $('original-data').textContent = JSON.stringify(result.original, null, 2);
   $('review-warnings').innerHTML = '<strong>Review notes</strong><ul>' + c.review.warnings.map(w => `<li>${escapeHTML(w)}</li>`).join('') + '</ul>';
   const image = httpsLink(c.image_url);
@@ -222,7 +270,8 @@ async function loadRequests() {
   $('request-list').innerHTML = rows.length ? rows.map(row => {
     const e = row.event, r = row.result;
     const c = e.component || state.inventory?.components[e.component_id]?.component;
-    return `<article class="request-card"><div><h3>${escapeHTML(c?.mpn || e.component_id)} <span class="status ${escapeHTML(r.status)}">${escapeHTML(r.status)}</span></h3><p>${e.kind === 'create' ? 'New component' : 'Stock adjustment'} · ${e.delta > 0 ? '+' : ''}${number(e.delta)} pieces · ${escapeHTML(row.repo)}</p><p>${escapeHTML(e.note)}</p>${r.error ? `<p class="error">${escapeHTML(r.error)}</p>` : ''}<p class="small">${escapeHTML(e.id)} · ${new Date(row.updated * 1000).toLocaleString()}</p></div><div>${r.url ? `<a href="${escapeHTML(httpsLink(r.url))}" target="_blank" rel="noopener noreferrer">View request #${r.number} ↗</a>` : '<span class="small">Waiting for connection</span>'}</div></article>`;
+    const label = e.kind === 'transfer' ? `Move ${number(e.quantity)} pieces · ${boxName(e.from_box)} → ${boxName(e.to_box)}` : e.box ? e.kind === 'box_create' ? 'New box' : 'Box edit' : `${e.kind === 'create' ? 'New component' : 'Stock adjustment'} · ${e.delta > 0 ? '+' : ''}${number(e.delta)} pieces${Object.hasOwn(e,'box_id') ? ' · ' + boxName(e.box_id) : ''}`;
+    return `<article class="request-card"><div><h3>${escapeHTML(e.box?.name || c?.mpn || e.component_id)} <span class="status ${escapeHTML(r.status)}">${escapeHTML(r.status)}</span></h3><p>${escapeHTML(label)} · ${escapeHTML(row.repo)}</p><p>${escapeHTML(e.note)}</p>${r.error ? `<p class="error">${escapeHTML(r.error)}</p>` : ''}<p class="small">${escapeHTML(e.id)} · ${new Date(row.updated * 1000).toLocaleString()}</p></div><div>${r.url ? `<a href="${escapeHTML(httpsLink(r.url))}" target="_blank" rel="noopener noreferrer">View request #${r.number} ↗</a>` : '<span class="small">Waiting for connection</span>'}</div></article>`;
   }).join('') : '<div class="panel empty"><h3>No requests yet</h3><p>Import a component or adjust stock to send your first request.</p></div>';
 }
 
@@ -252,15 +301,43 @@ mobileLogout.addEventListener('click', () => $('logout').click());
 document.querySelector('.topbar').append(mobileLogout);
 window.addEventListener('hashchange', () => { if (state.settings) showView(location.hash.slice(1)); });
 $('search').addEventListener('input', renderInventory); $('category-filter').addEventListener('change', renderInventory); $('low-filter').addEventListener('change',renderInventory);
+$('box-filter').addEventListener('change',renderInventory);
+$('refresh-boxes').addEventListener('click', async event => { clearMessages(); try { await busy(event.currentTarget,loadInventory,'Refreshing…'); } catch(error) { showError(error); } });
+$('new-box').addEventListener('click', () => openBox());
+$('box-list').addEventListener('click', event => {
+  const edit = event.target.closest('[data-edit-box]'), contents = event.target.closest('[data-box-contents]');
+  if (edit) openBox(edit.dataset.editBox);
+  if (contents) { $('box-filter').value = contents.dataset.boxContents; renderInventory(); showView('inventory'); }
+});
+$('box-list').addEventListener('error', event => {
+  if (event.target.tagName === 'IMG') { const placeholder = document.createElement('div'); placeholder.className = 'box-picture'; placeholder.textContent = '▣'; placeholder.setAttribute('aria-hidden','true'); event.target.replaceWith(placeholder); }
+},true);
+$('close-box').addEventListener('click', () => $('box-dialog').close());
+['box-name','box-image','box-description'].forEach(id => $(id).addEventListener('input', () => { state.boxRequest = null; }));
+$('box-form').addEventListener('submit', async event => {
+  event.preventDefault(); $('box-error').textContent = '';
+  state.boxRequest ||= crypto.randomUUID().replaceAll('-','');
+  try { await busy(event.submitter,async () => {
+    const result = await api('box',{request_id:state.boxRequest,box_id:state.boxDraft.id,name:$('box-name').value.trim(),image_url:$('box-image').value.trim(),description:$('box-description').value.trim(),previous:state.boxOriginal});
+    $('box-dialog').close(); transactionNotice(result);
+  },'Submitting…'); } catch(error) { showError(error,'box-error'); }
+});
 $('refresh').addEventListener('click', async event => { clearMessages(); try { await busy(event.currentTarget, loadInventory, 'Refreshing…'); } catch (error) { showError(error); } });
 $('inventory-rows').addEventListener('click', event => { const button = event.target.closest('[data-adjust]'); if (button) openStock(button.dataset.adjust); });
 $('inventory-rows').addEventListener('error', event => { if (event.target.tagName === 'IMG') event.target.hidden = true; }, true);
 $('close-stock').addEventListener('click', () => $('stock-dialog').close());
-['stock-action','stock-quantity','stock-note'].forEach(id => $(id).addEventListener('input', () => { state.stockRequest = null; }));
+['stock-action','stock-quantity','stock-note','stock-box','stock-to-box'].forEach(id => $(id).addEventListener('input', () => { state.stockRequest = null; }));
+$('stock-action').addEventListener('change', () => renderStockBoxes());
 $('stock-form').addEventListener('submit', async event => {
   event.preventDefault(); $('stock-error').textContent = '';
   if (!state.stockRequest) state.stockRequest = crypto.randomUUID().replaceAll('-','');
-  try { await busy(event.submitter, async () => { const result = await api('adjust', {request_id:state.stockRequest, component_id:state.stockId, delta:Number($('stock-quantity').value) * ($('stock-action').value === 'remove' ? -1 : 1), note:$('stock-note').value}); $('stock-dialog').close(); transactionNotice(result); }); }
+  try { await busy(event.submitter, async () => {
+    const transfer = $('stock-action').value === 'transfer';
+    const data = {request_id:state.stockRequest, component_id:state.stockId, note:$('stock-note').value};
+    if (transfer) Object.assign(data,{quantity:Number($('stock-quantity').value),from_box:decodeBox($('stock-box').value),to_box:decodeBox($('stock-to-box').value)});
+    else Object.assign(data,{delta:Number($('stock-quantity').value) * ($('stock-action').value === 'remove' ? -1 : 1),box_id:decodeBox($('stock-box').value)});
+    const result = await api(transfer ? 'transfer' : 'adjust',data); $('stock-dialog').close(); transactionNotice(result);
+  }); }
   catch (error) { showError(error, 'stock-error'); }
 });
 $('import-form').addEventListener('submit', async event => {
@@ -278,7 +355,7 @@ $('review-form').addEventListener('submit', async event => {
   try { await busy(event.submitter, async () => {
     const edits = Object.fromEntries(['manufacturer','mpn','description','category','package','location'].map(k => [k,$('part-' + k).value]));
     try { edits.attributes = JSON.parse($('part-attributes').value); } catch { throw new Error('Electrical attributes must be a valid JSON object.'); }
-    const result = await api('create', {draft_id:state.draft.draft_id, confirmed:$('part-confirmed').checked, quantity:Number($('part-quantity').value), edits, note:$('part-note').value});
+    const result = await api('create', {draft_id:state.draft.draft_id, confirmed:$('part-confirmed').checked, quantity:Number($('part-quantity').value), box_id:decodeBox($('part-box').value), edits, note:$('part-note').value});
     state.draft = null; $('review-panel').hidden = true; $('review-step').classList.remove('active'); transactionNotice(result);
   }, 'Submitting…'); } catch(error) { showError(error); }
 });

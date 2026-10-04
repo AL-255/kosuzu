@@ -7,7 +7,7 @@ Download an archive or wheel from [Releases](https://github.com/AL-255/kosuzu/re
 After your first sign-in, a four-step guide opens automatically:
 
 1. **GitHub connection:** enter the inventory repository, branch and your client token. Server administrators also enter a separate server token. People joining an existing server workspace only enter their own client token; the administrator manages the repository.
-2. **Suppliers:** enable the distributors you use. API keys are optional. Each API supplier has switches for API access and public-page fallback; turn off API access to use public pages only. LCSC needs no key. Disabled suppliers disappear from the importer.
+2. **Suppliers:** enable the distributors you use. API keys are optional. Each API supplier has switches for API access and public-page fallback; turn off API access to use public pages only. LCSC and Adafruit need no key. Disabled suppliers disappear from the importer.
 3. **Review preferences:** turn off LLM review to check details yourself, or enable it with your provider key. Manual fallback is on by default, so missing keys and failed LLM requests keep the original part details and display an explicit warning. Turn fallback off to require a successful LLM review.
 4. **Finish:** initialize a new database if needed, then check the saved GitHub connection. The server administrator's check verifies both client and server reads. Only a successful connection check enables Finish.
 
@@ -45,7 +45,7 @@ Keep the administrator key private; distribute the client access key to collabor
 
 Browser users visit the Linux server's HTTPS origin, sign in with the client key, and configure their own client GitHub, LLM, and supplier credentials. Each browser profile has dedicated credentials separate from the server token.
 
-On iPhone/iPad use **Safari → Share → Add to Home Screen**. The PWA supplies an icon, standalone layout, and cached application shell. v0.1 uses this PWA rather than an App Store binary. An unreachable server cannot accept new browser operations. The running service caches inventory and marks it stale when GitHub is unavailable; this is not disconnected iOS inventory editing.
+On iPhone/iPad use **Safari → Share → Add to Home Screen**. The PWA supplies an icon, standalone layout, and cached application shell. v0.2 uses this PWA rather than an App Store binary. An unreachable server cannot accept new browser operations. The running service caches inventory and marks it stale when GitHub is unavailable; this is not disconnected iOS inventory editing.
 
 Desktop programs submit directly to GitHub; the Linux server discovers their requests. Requests remain pending until a server runs. Use `--port` and `--state-dir` for multiple local instances. Default client state is `%LOCALAPPDATA%\Kosuzu\client` on Windows, `~/Library/Application Support/Kosuzu/client` on macOS, and `$XDG_STATE_HOME/kosuzu/client` or `~/.local/state/kosuzu/client` on Linux.
 
@@ -59,6 +59,7 @@ Session cookies are HttpOnly and SameSite, valid for 30 days. A separate HttpOnl
 | Mouser | [Search API](https://www.mouser.com/en/api-search/) key | Exact MPN or Mouser code; image and datasheet links. |
 | Arrow | Login and [API key](https://developers.arrow.com/api/index.php/site/page?view=Itemservice) | v4 search, MPN/item/source identity; imagery from the linked product page. |
 | LCSC | Public product page | `C` followed by digits; structured metadata and specifications. |
+| Adafruit | Public product page | Numeric product ID such as `3406` or `PID 3406`; exact product identity, image and review evidence. When manufacturer/MPN is absent, uses an explicitly labeled catalog identity (`Adafruit (catalog)`, `ADA-3406`) and warns you to verify it. |
 
 Public pages can be blocked or changed. With public-page fallback enabled, DigiKey/Mouser/Arrow use structured product pages when API credentials are incomplete or the API request fails. With API access off, they only use public pages. Turn off fallback to stop instead of switching sources. Ambiguous part identities stop the import; they never trigger another-source lookup. Search pages may require an exact product URL. Arrow's separate image-page lookup can also be blocked. Failures are shown instead of guessing a part. Images are stored as external references and depend on supplier/CDN availability. Exact product URLs must belong to the selected supplier.
 
@@ -66,10 +67,24 @@ Save an OpenAI-compatible LLM base URL, model, and key. DeepSeek defaults to `ht
 
 The provider receives candidate metadata and supplier evidence. It normalizes fields/units, flags inconsistencies, and cannot replace provenance URLs. Review original data and warnings, check the datasheet, correct fields, assign a location and positive initial stock, then confirm. LLM review checks consistency rather than independently proving electrical truth. LLM keys are optional when manual review or manual fallback is selected. Fallback preserves the original details and records a warning; it does not claim an LLM checked them. Saving unreviewed metadata cannot bypass the confirmation gate.
 
+## Boxes and stock placement
+
+Open **Boxes → New box** to give a box a unique name, an optional HTTPS picture URL, and a description. Its request appears in My requests; the server applies it before it can receive parts. Edit box details from its card. Box edits detect stale versions rather than overwrite another person's changes.
+
+A component's quantity is split between boxes, for example **BOXA: 10 · BOXB: 20**, with **30** pieces in total. Inventory shows each allocation, searches box names, and filters by box; View contents on a box card applies that filter. The stock count in a filtered row is the count in that box, followed by the overall total. Your location note remains separate descriptive metadata.
+
+Select an **Initial box** during import review. With one stock placement, Adjust stock selects it for you. With several placements, you must choose which box receives an addition or supplies a removal. You can add stock to any existing box, including one the component has not used yet. The server checks the selected box's quantity; it cannot borrow from another box to cover a shortage.
+
+Choose **Move between boxes** to move existing stock. Select a source and destination, then a positive quantity. Transfers preserve total stock and obey the same atomic/retry rules as stock changes. Empty placements disappear; the last placement stays available when a part runs out. **Unboxed** holds stock without an assigned box and is also a valid source/destination.
+
+### Upgrade from v0.1
+
+Update the server and all clients to v0.2 together before sending new requests. v0.2 reads schema 1 snapshots without changing counts or transaction receipts, assigns their stock to Unboxed, and writes schema 2 on the first applied transaction. v0.1 programs cannot read schema 2. Existing location notes are preserved. Pending schema 1 events remain readable; an adjustment without a box choice is rejected if the part now has multiple placements. Reject that request and submit a corrected request choosing a box. Back up the repository and server state before upgrading.
+
 ## Stock changes and errors
 
 Search by MPN, supplier code, description, attributes, or location. **Adjust stock** creates an addition/removal with an optional note. Counts change only when the server applies the request. **My requests** shows queued, pending, applied, or rejected state; **Sync requests** retries saved operations and refreshes status. The running program retries even when its browser is closed.
 
 An overspending removal stays open in the error queue with the available/requested stock and a fix prompt. All server web clients see warnings. Independent desktop clients receive a blocked request with the failure reason through GitHub commit statuses when their outbox synchronizes. Administrators can retry after fixing the cause, or reject and have the user submit a smaller removal. Credentials, network, branch rules, malformed events, and duplicate components also appear here. Existing manufacturer/MPN entries need stock adjustment rather than another component. Rejected requests are never reopened silently.
 
-GitHub is authoritative. SQLite stores credentials, cache, queues, and drafts. Credentials are **plaintext at rest**, protected by private filesystem permissions; use disk encryption and private backups. Back up GitHub and server state, stopping the service for SQLite backups. Never commit local state. v0.1 targets snapshots below 1 MB (GitHub Contents limit) and fewer than 10,000 open proposals. Oversized/missing snapshots produce errors rather than replacement. Prune merged branches after audit/backup.
+GitHub is authoritative. SQLite stores credentials, cache, queues, and drafts. Credentials are **plaintext at rest**, protected by private filesystem permissions; use disk encryption and private backups. Back up GitHub and server state, stopping the service for SQLite backups. Never commit local state. v0.2 targets snapshots below 1 MB (GitHub Contents limit) and fewer than 10,000 open proposals. Oversized/missing snapshots produce errors rather than replacement. Prune merged branches after audit/backup.

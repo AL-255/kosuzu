@@ -11,7 +11,33 @@ from tests.helpers import ResponseTransport, part
 
 class ImportTests(unittest.TestCase):
     def test_all_required_suppliers_are_registered(self):
-        self.assertEqual(set(REGISTRY),{"digikey","mouser","arrow","lcsc"})
+        self.assertEqual(set(REGISTRY),{"digikey","mouser","arrow","lcsc","adafruit"})
+
+    def test_adafruit_numeric_product_catalog_identity_and_image(self):
+        html='<script type="application/ld+json">'+json.dumps({"@type":"Product","sku":3406,"name":"Test board","description":"<p>Test board with headers</p>","image":["https://cdn-shop.adafruit.com/3406.jpg"]})+'</script>'
+        with patch("kosuzu.suppliers.public_page",return_value=(html,'https://www.adafruit.com/product/3406')):
+            result,evidence=lookup("adafruit","PID 3406")
+        self.assertEqual(result["mpn"],"ADA-3406")
+        self.assertEqual(result["manufacturer"],"Adafruit (catalog)")
+        self.assertEqual(result["supplier_code"],"3406")
+        self.assertEqual(result["image_url"],"https://cdn-shop.adafruit.com/3406.jpg")
+        self.assertIn("verify manufacturer",result["attributes"]["Identity basis"])
+        self.assertNotIn('<p>',result["description"])
+
+    def test_adafruit_keeps_real_manufacturer_identity_when_listed(self):
+        html='<script type="application/ld+json">'+json.dumps({"@type":"Product","sku":"123","mpn":"EXAMPLE-MPN","brand":{"name":"Example"},"name":"Test component","image":"/image.png"})+'</script>'
+        with patch("kosuzu.suppliers.public_page",return_value=(html,'https://www.adafruit.com/product/123')):
+            result,_=lookup("adafruit","123")
+        self.assertEqual(result["manufacturer"],"Example"); self.assertEqual(result["mpn"],"EXAMPLE-MPN")
+        self.assertNotIn("Identity basis",result["attributes"])
+
+    def test_adafruit_wrong_or_ambiguous_product_and_invalid_code_rejected(self):
+        with patch("kosuzu.suppliers.public_page",return_value=('<script type="application/ld+json">{"@type":"Product","sku":999,"name":"Wrong"}</script>','https://www.adafruit.com/product/999')):
+            with self.assertRaisesRegex(ValidationError,"exact product ID"): lookup("adafruit","3406")
+        with patch("kosuzu.suppliers.public_page") as page:
+            for code in ("0","R-10K","3406/999"):
+                with self.assertRaises(ValidationError): lookup("adafruit",code)
+        page.assert_not_called()
 
     def test_mouser_exact_code_and_image(self):
         p={"MouserPartNumber":"123-TEST","ManufacturerPartNumber":"R-10K","Manufacturer":"Example Components","Description":"Resistor 10K","ProductDetailUrl":"https://www.mouser.com/ProductDetail/test","ImagePath":"https://www.mouser.com/images/test.jpg","DataSheetUrl":"https://www.example.com/resistor.pdf","ProductAttributes":[{"AttributeName":"Resistance","AttributeValue":"10 kohm"}]}

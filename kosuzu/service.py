@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 from .github import GitHub
 from .http import RemoteError
 from .llm import refine
-from .model import ValidationError, component, new_event, text, safe_url
+from .model import ValidationError, component, new_event, new_transfer, new_box_event, choose_box, text, safe_url, validate_event, validate_inventory, canonical
 from .suppliers import REGISTRY, lookup
 
 
@@ -160,6 +160,8 @@ class Service:
                     raise
                 part, evidence = lookup(supplier, data.get("code"), {}, product_url=data.get("product_url", ""))
                 warnings.append("The supplier API was unavailable. Details were retrieved from its public page instead.")
+            if part.get("attributes", {}).get("Identity basis"):
+                warnings.append(part["attributes"]["Identity basis"])
         # Validate user/supplier metadata before sending anything to an LLM.
         part = component({**part, "review": {"model": "manual", "checked_at": datetime.now(timezone.utc).isoformat(), "warnings": [], "confirmed": True}})
         part["review"]["confirmed"] = False
@@ -199,12 +201,12 @@ class Service:
         reviewed = {**draft, **edits, "review": {**draft["review"], "confirmed": True}}
         reviewed.pop("id", None)
         part = component(reviewed)
-        event = new_event("create", part["id"], data.get("quantity"), part, data.get("note", ""))
+        event = new_event("create", part["id"], data.get("quantity"), part, data.get("note", ""), box_id=data.get("box_id", ""))
         # Stable draft -> transaction mapping survives a lost HTTP response.
         with self.store.lock:
             saved = self.store.setting("draft-event:" + data["draft_id"])
             if saved:
-                if saved["component"] != part or saved["delta"] != event["delta"] or saved["note"] != event["note"]:
+                if saved["component"] != part or saved["delta"] != event["delta"] or saved["note"] != event["note"] or saved.get("box_id", "") != event["box_id"]:
                     raise ValidationError("This import already has a proposal. Retry unchanged or import a new draft")
                 event = saved
             else:
@@ -212,16 +214,39 @@ class Service:
         return self.submit(user, event)
 
     def adjust(self, user, data):
+        selected = data.get("box_id")
+        if selected is None:
+            # Pin the user's current single placement into the proposal. Never
+            # silently choose a different location when the server later merges.
+            prior = next((row for row in self.store.outbox(user["id"]) if row["id"] == data.get("request_id")), None)
+            if prior and "box_id" in prior["event"]:
+                selected = prior["event"]["box_id"]
+            else:
+                inventory = self.inventory(user)["inventory"]
+                row = inventory["components"].get(data.get("component_id"))
+                if not row: raise ValidationError("Component does not exist; synchronize first")
+                selected = choose_box(inventory, row)
+        event = new_event("adjust", data.get("component_id"), data.get("delta"), note=data.get("note", ""), box_id=selected)
+        return self.request(user, data, event)
+
+    def transfer(self, user, data):
+        event = new_transfer(data.get("component_id"), data.get("quantity"), data.get("from_box"), data.get("to_box"), data.get("note", ""))
+        return self.request(user, data, event)
+
+    def save_box(self, user, data):
+        value = {"id": data.get("box_id"), "name": data.get("name", ""), "description": data.get("description", ""), "image_url": data.get("image_url", "")}
+        event = new_box_event(value, data.get("previous"))
+        return self.request(user, data, event)
+
+    def request(self, user, data, event):
         ident = text(data.get("request_id"), "request_id", 32, True)
-        event = new_event("adjust", data.get("component_id"), data.get("delta"), note=data.get("note", ""))
         event["id"] = ident
-        from .model import validate_event
         event = validate_event(event)
         with self.store.lock:
             prior = next((row for row in self.store.outbox(user["id"]) if row["id"] == ident), None)
             if prior:
                 old = prior["event"]
-                if any(old[k] != event[k] for k in ("delta", "component_id", "note")):
+                if canonical({k:v for k,v in old.items() if k not in {"id", "created_at"}}) != canonical({k:v for k,v in event.items() if k not in {"id", "created_at"}}):
                     raise ValidationError("Request ID already has different content")
                 event = old
             gh = self.github(user["id"])
@@ -264,7 +289,7 @@ class Service:
             cache = self.store.setting(key)
             if not cache:
                 raise
-            return {**cache, "stale": True, "warning": str(exc)}
+            return {**cache, "inventory": validate_inventory(cache["inventory"]), "stale": True, "warning": str(exc)}
 
     def sync(self):
         if self.mode != "server":

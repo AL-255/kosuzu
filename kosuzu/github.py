@@ -95,6 +95,15 @@ class GitHub:
         ident = event["id"]
         base = self.head()
         inventory = self.inventory(base)
+        def label(ident):
+            return inventory["boxes"].get(ident, {}).get("name", "Unknown box") if ident else "Unboxed"
+        title = f"Kosuzu: {event['kind']} {event['delta']:+d}"
+        if event["kind"].startswith("box_"):
+            title = f"Kosuzu: {'create' if event['kind'] == 'box_create' else 'edit'} box {event['box']['name']}"
+        elif event["kind"] == "transfer":
+            title = f"Kosuzu: move {event['quantity']} parts · {label(event['from_box'])} → {label(event['to_box'])}"
+        elif "box_id" in event:
+            title += " · " + label(event["box_id"])
         if ident in inventory["receipts"]:
             apply_event(inventory, event)  # Detect reuse with a changed payload.
             return {"status": "applied", "event_id": ident}
@@ -131,7 +140,7 @@ class GitHub:
                 if result["status"] == "pending":
                     result["status"] = "blocked"
             return result
-        pr = self.call("POST", "pulls", {"title": f"Kosuzu: {event['kind']} {event['delta']:+d}", "head": branch, "base": self.branch, "body": f"Transaction `{ident}`. The Kosuzu server validates this proposal against current stock before merging."})
+        pr = self.call("POST", "pulls", {"title": title[:250], "head": branch, "base": self.branch, "body": f"Transaction `{ident}`. The Kosuzu server validates this proposal against current stock and box assignments before merging."})
         return {"status": "pending", "event_id": ident, "number": pr["number"], "url": pr["html_url"]}
 
     def proposal_event(self, number):

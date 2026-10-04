@@ -1,8 +1,9 @@
 import unittest
 import base64
 import json
+import uuid
 from kosuzu.http import RemoteError
-from kosuzu.model import ValidationError, new_event
+from kosuzu.model import ValidationError, new_event, new_transfer, new_box_event
 from tests.helpers import FakeGitHub, part
 
 
@@ -73,6 +74,34 @@ class GitHubTests(unittest.TestCase):
         with self.assertRaisesRegex(ValidationError,"available 10"): self.gh.merge(b["number"])
         self.assertEqual(self.gh.inventory()["components"][self.part["id"]]["quantity"],10)
         self.assertEqual(self.api.prs[b["number"]]["state"],"open")
+
+    def test_box_concurrent_removals_cannot_borrow_from_other_box(self):
+        a={"id":uuid.uuid4().hex,"name":"BOXA","description":"","image_url":""}
+        b={**a,"id":uuid.uuid4().hex,"name":"BOXB"}
+        for box in (a,b):
+            pr=self.gh.submit(new_box_event(box)); self.gh.merge(pr["number"])
+        event=new_event("create",self.part["id"],10,self.part,box_id=a["id"])
+        pr=self.gh.submit(event); self.gh.merge(pr["number"])
+        pr=self.gh.submit(new_event("adjust",self.part["id"],20,box_id=b["id"])); self.gh.merge(pr["number"])
+        first=self.gh.submit(new_event("adjust",self.part["id"],-7,box_id=a["id"]))
+        second=self.gh.submit(new_event("adjust",self.part["id"],-7,box_id=a["id"]))
+        self.api.before_update=lambda:self.gh.merge(first["number"])
+        with self.assertRaisesRegex(ValidationError,"BOXA: available 3"):
+            self.gh.merge(second["number"])
+        row=self.gh.inventory()["components"][self.part["id"]]
+        self.assertEqual(row["boxes"],{a["id"]:3,b["id"]:20})
+        self.assertEqual(row["quantity"],23)
+
+    def test_box_transfer_response_loss_never_moves_twice(self):
+        self.create(50)
+        box={"id":uuid.uuid4().hex,"name":"BOXA","description":"","image_url":""}
+        pr=self.gh.submit(new_box_event(box)); self.gh.merge(pr["number"])
+        event=new_transfer(self.part["id"],20,"",box["id"])
+        pr=self.gh.submit(event)
+        self.api.fail_after=("PATCH","git/refs/heads/main")
+        with self.assertRaises(RemoteError): self.gh.merge(pr["number"])
+        self.assertEqual(self.gh.submit(event)["status"],"applied")
+        self.assertEqual(self.gh.inventory()["components"][self.part["id"]]["boxes"],{"":30,box["id"]:20})
 
     def test_concurrent_ref_change_revalidates_stock(self):
         self.create(50)

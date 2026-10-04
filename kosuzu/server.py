@@ -159,6 +159,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.response(200, service.create(user, data))
             if path == "/api/adjust":
                 return self.response(200, service.adjust(user, data))
+            if path == "/api/transfer":
+                return self.response(200, service.transfer(user, data))
+            if path == "/api/box":
+                return self.response(200, service.save_box(user, data))
             if path == "/api/flush":
                 return self.response(200, service.flush(user))
             if path in {"/api/initialize", "/api/sync", "/api/queue"}:
